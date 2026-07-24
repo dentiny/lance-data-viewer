@@ -97,24 +97,48 @@ header h1 {
     font-size: 1rem;
 }
 
-.dataset-list .dataset-item {
-    padding: 12px 16px;
-    margin: 4px 0;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    border: 1px solid transparent;
+.dataset-connection {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 
-.dataset-list .dataset-item:hover {
-    background-color: #f8f9fa;
-    border-color: #dee2e6;
+.dataset-connection input {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+    font-size: 0.8rem;
 }
 
-.dataset-list .dataset-item.active {
-    background-color: #3498db;
+.dataset-connection button {
+    padding: 9px 12px;
+    border: 0;
+    border-radius: 4px;
+    background: #3498db;
     color: white;
-    border-color: #2980b9;
+    cursor: pointer;
+}
+
+.dataset-connection button:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+.connection-status {
+    margin-top: 10px;
+    color: #6c757d;
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+}
+
+.connection-status.connected {
+    color: #198754;
+}
+
+.connection-status.error {
+    color: #dc3545;
 }
 
 .content {

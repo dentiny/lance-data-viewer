@@ -18,9 +18,19 @@
         <main class="main-content">
             <aside class="sidebar">
                 <div class="sidebar-section">
-                    <h3>Datasets</h3>
-                    <div class="dataset-list" id="datasetList">
-                        <div class="loading">Loading datasets...</div>
+                    <h3>Dataset URI</h3>
+                    <form class="dataset-connection" id="datasetForm">
+                        <input
+                            id="datasetUri"
+                            type="text"
+                            placeholder="s3://bucket/path/dataset.lance"
+                            autocomplete="off"
+                            spellcheck="false"
+                        >
+                        <button id="connectDataset" type="submit">Connect</button>
+                    </form>
+                    <div class="connection-status" id="connectionStatus">
+                        Enter a Lance dataset URI to begin.
                     </div>
                 </div>
 
