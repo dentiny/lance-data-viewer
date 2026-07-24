@@ -5,14 +5,13 @@ Run from the backend directory:
     python -m pytest tests/ -v
 
 The sample data is written once per session with whatever lancedb/pyarrow
-versions are installed, so the same tests run against every constraints file.
+version is installed.
 """
 
-import os
 import sys
 from pathlib import Path
 
-import lancedb
+import lance
 import pyarrow as pa
 import pytest
 
@@ -55,9 +54,11 @@ def _corrupt_table(db_dir: Path, name: str) -> None:
 @pytest.fixture(scope="session")
 def data_dir(tmp_path_factory):
     path = tmp_path_factory.mktemp("lance-data")
-    db = lancedb.connect(str(path))
-    db.create_table("sample", _sample_table())
-    db.create_table("broken", pa.table({"id": pa.array([1, 2, 3], type=pa.int64())}))
+    lance.write_dataset(_sample_table(), str(path / "sample.lance"))
+    lance.write_dataset(
+        pa.table({"id": pa.array([1, 2, 3], type=pa.int64())}),
+        str(path / "broken.lance"),
+    )
     _corrupt_table(path, "broken")
     return path
 
@@ -67,18 +68,24 @@ def vec_nulls_preserved(data_dir):
     """Lance format v1 (lancedb 0.3.x/0.5) stores a null list as an empty
     list. Detect what the installed version actually does so tests can
     assert the matching serialization."""
-    db = lancedb.connect(str(data_dir))
-    values = db.open_table("sample").to_arrow().column("vec").to_pylist()
+    values = lance.dataset(str(data_dir / "sample.lance")).to_table().column("vec").to_pylist()
     return values[5] is None
 
 
 @pytest.fixture(scope="session")
 def client(data_dir):
-    # DATA_PATH is read at import time, so set it before importing app
-    os.environ["DATA_PATH"] = str(data_dir)
     import app as app_module
-    app_module.DATA_PATH = data_dir
 
     from fastapi.testclient import TestClient
     with TestClient(app_module.app) as test_client:
         yield test_client
+
+
+@pytest.fixture(scope="session")
+def sample_uri(data_dir):
+    return str(data_dir / "sample.lance")
+
+
+@pytest.fixture(scope="session")
+def broken_uri(data_dir):
+    return str(data_dir / "broken.lance")

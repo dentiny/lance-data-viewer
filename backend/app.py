@@ -4,15 +4,12 @@ from contextlib import asynccontextmanager
 import os
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-import json
+from typing import Optional
 
-import lancedb
+import lance
 import pyarrow as pa
-from packaging.version import parse as parse_version
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from serialize_value import serialize_value
 
@@ -35,8 +32,8 @@ APP_VERSION = _read_app_version()
 async def lifespan(_app: FastAPI):
     """Log version information on startup."""
     logger.info(f"Lance Data Viewer v{APP_VERSION}")
-    logger.info(f"LanceDB: {lancedb.__version__}, PyArrow: {pa.__version__}")
-    logger.info(f"Data path: {DATA_PATH}")
+    logger.info(f"Lance: {lance.__version__}, PyArrow: {pa.__version__}")
+    logger.info("Waiting for a dataset URI from the UI")
     yield
 
 
@@ -55,30 +52,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DATA_PATH = Path(os.getenv("DATA_PATH", "/data"))
 MAX_LIMIT = 1000
 
-def validate_dataset_name(name: str) -> bool:
-    return (
-        name.replace("_", "").replace("-", "").isalnum()
-        and not name.startswith(".")
-        and len(name) <= 100
-    )
+def open_dataset(uri: str):
+    """Open a Lance dataset from any URI supported by Lance."""
+    dataset_uri = uri.strip()
+    if not dataset_uri:
+        raise HTTPException(status_code=400, detail="Dataset URI is required")
 
-def get_lance_connection():
-    if not DATA_PATH.exists():
-        raise HTTPException(status_code=500, detail="Data path not found")
-    return lancedb.connect(str(DATA_PATH))
+    try:
+        return lance.dataset(dataset_uri)
+    except Exception as error:
+        logger.warning("Failed to open dataset URI: %s", error)
+        raise HTTPException(status_code=400, detail="Unable to open dataset URI")
 
 
 def serialize_schema_metadata(metadata):
-    """Convert Arrow schema metadata into a JSON-safe dictionary.
-
-    PyArrow exposes schema metadata as bytes keys and values, but JSON requires
-    string keys and values. ``serialize_value`` decodes valid UTF-8 bytes and
-    base64-encodes bytes that cannot be decoded, preventing FastAPI response
-    serialization from raising ``UnicodeDecodeError``.
-    """
+    """Convert Arrow schema metadata into a JSON-safe dictionary."""
     return {
         serialize_value(key): serialize_value(value)
         for key, value in (metadata or {}).items()
@@ -200,23 +190,20 @@ def serialize_arrow_value(value):
 @app.get("/healthz")
 async def health_check():
     try:
-        lancedb_version = lancedb.__version__
+        lance_version = lance.__version__
         pyarrow_version = pa.__version__
 
-        # Determine compatibility features based on Lance version
         compat = {
             "vector_preview": True,
-            "schema_evolution": parse_version(lancedb_version) >= parse_version("0.5"),
-            "lance_v2_format": parse_version(lancedb_version) >= parse_version("0.16")
+            "remote_dataset_uri": True,
         }
 
-        # Generate build tag
-        build_tag = f"app-{APP_VERSION}_lancedb-{lancedb_version}"
+        build_tag = f"app-{APP_VERSION}_lance-{lance_version}"
 
         return {
             "ok": True,
             "app_version": APP_VERSION,
-            "lancedb_version": lancedb_version,
+            "lance_version": lance_version,
             "pyarrow_version": pyarrow_version,
             "build_tag": build_tag,
             "compat": compat
@@ -225,223 +212,160 @@ async def health_check():
         logger.error(f"Error in health check: {e}")
         return {"ok": False, "error": str(e)}
 
-@app.get("/datasets")
-def list_datasets():
+@app.get("/dataset")
+def get_dataset_info(uri: str = Query(min_length=1)):
+    dataset = open_dataset(uri)
     try:
-        db = get_lance_connection()
-        if hasattr(db, "list_tables"):
-            table_names = db.list_tables().tables
-        else:
-            # table_names() was deprecated in favor of list_tables(),
-            # but older lancedb versions only have table_names()
-            table_names = db.table_names()
-        valid_tables = [name for name in table_names if validate_dataset_name(name)]
-        return {"datasets": valid_tables}
-    except Exception as e:
-        logger.error(f"Error listing datasets: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list datasets")
-
-
-@app.get("/datasets/{dataset_name}/metadata")
-def get_dataset_metadata(dataset_name: str):
-    if not validate_dataset_name(dataset_name):
-        raise HTTPException(status_code=400, detail="Invalid dataset name")
-
-    try:
-        db = get_lance_connection()
-        table = db.open_table(dataset_name)
-        return describe_schema(table.schema)
-    except Exception as e:
-        logger.error(f"Error getting metadata for {dataset_name}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get dataset metadata")
-
-
-@app.get("/datasets/{dataset_name}/schema")
-def get_dataset_schema(dataset_name: str):
-    if not validate_dataset_name(dataset_name):
-        raise HTTPException(status_code=400, detail="Invalid dataset name")
-
-    try:
-        db = get_lance_connection()
-        table = db.open_table(dataset_name)
-        description = describe_schema(table.schema)
         return {
-            "fields": description["fields"],
-            "metadata": description["metadata"],
+            "uri": uri,
+            "rows": dataset.count_rows(),
+            "version": dataset.version,
         }
+    except Exception as error:
+        logger.warning("Failed to inspect dataset: %s", error)
+        raise HTTPException(status_code=400, detail="Unable to inspect dataset")
 
-    except Exception as e:
-        logger.error(f"Error getting schema for {dataset_name}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get dataset schema")
 
-@app.get("/datasets/{dataset_name}/columns")
-def get_dataset_columns(dataset_name: str):
-    if not validate_dataset_name(dataset_name):
-        raise HTTPException(status_code=400, detail="Invalid dataset name")
+@app.get("/dataset/metadata")
+def get_dataset_metadata(uri: str = Query(min_length=1)):
+    return describe_schema(open_dataset(uri).schema)
 
-    try:
-        db = get_lance_connection()
-        table = db.open_table(dataset_name)
-        description = describe_schema(table.schema)
-        return {"columns": description["columns"]}
 
-    except Exception as e:
-        logger.error(f"Error getting columns for {dataset_name}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get dataset columns")
+@app.get("/dataset/schema")
+def get_dataset_schema(uri: str = Query(min_length=1)):
+    description = describe_schema(open_dataset(uri).schema)
+    return {
+        "fields": description["fields"],
+        "metadata": description["metadata"],
+    }
 
-@app.get("/datasets/{dataset_name}/rows")
+
+@app.get("/dataset/columns")
+def get_dataset_columns(uri: str = Query(min_length=1)):
+    return {"columns": describe_schema(open_dataset(uri).schema)["columns"]}
+
+
+@app.get("/dataset/rows")
 def get_dataset_rows(
-    dataset_name: str,
+    uri: str = Query(min_length=1),
     limit: int = Query(default=50, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
-    columns: Optional[str] = Query(default=None)
+    columns: Optional[str] = Query(default=None),
 ):
-    if not validate_dataset_name(dataset_name):
-        raise HTTPException(status_code=400, detail="Invalid dataset name")
+    dataset = open_dataset(uri)
+    schema = dataset.schema
+
+    column_list = None
+    if columns:
+        column_list = [column.strip() for column in columns.split(",") if column.strip()]
+        schema_columns = set(schema.names)
+        invalid_columns = [column for column in column_list if column not in schema_columns]
+        if invalid_columns:
+            raise HTTPException(status_code=400, detail=f"Invalid columns: {invalid_columns}")
 
     try:
-        db = get_lance_connection()
-        table = db.open_table(dataset_name)
-
-        column_list = None
-        if columns:
-            column_list = [col.strip() for col in columns.split(",") if col.strip()]
-            schema_columns = [field.name for field in table.schema]
-            invalid_columns = [col for col in column_list if col not in schema_columns]
-            if invalid_columns:
-                raise HTTPException(status_code=400, detail=f"Invalid columns: {invalid_columns}")
-
-        # Read rows, falling back to an informational response if the dataset is unreadable
-        result_table = None
-        total_count = 0
-
-        try:
+        total_count = dataset.count_rows()
+        end = min(offset + limit, total_count)
+        if offset >= total_count:
+            selected = column_list or schema.names
+            result_table = pa.table(
+                {
+                    name: pa.array([], type=schema.field(name).type)
+                    for name in selected
+                }
+            )
+        else:
+            indices = list(range(offset, end))
             try:
-                # Native pagination: read only the requested rows from disk
-                total_count = table.count_rows()
-                end = min(offset + limit, total_count)
-                if offset >= total_count:
-                    result_table = pa.table({field.name: pa.array([], type=field.type) for field in table.schema})
-                else:
-                    offsets = list(range(offset, end))
-                    builder = table.take_offsets(offsets)
-                    if column_list:
-                        available_columns = [col for col in column_list if col in [field.name for field in table.schema]]
-                        if available_columns:
-                            builder = builder.select(available_columns)
-                    result_table = builder.to_arrow()
-
-                logger.info(f"Read {result_table.num_rows} rows (offset={offset}, limit={limit}) from {dataset_name} ({total_count} total)")
-
+                result_table = dataset.take(indices, columns=column_list)
             except (AttributeError, TypeError):
-                # Fallback for older Lance versions without take_offsets/count_rows
-                logger.info(f"Native pagination unavailable, using Arrow slice for {dataset_name}")
-                arrow_table = table.to_arrow()
-                total_count = arrow_table.num_rows
+                result_table = dataset.to_table(columns=column_list).slice(offset, limit)
+        logger.info(
+            "Read %s rows (offset=%s, limit=%s) from dataset",
+            result_table.num_rows,
+            offset,
+            limit,
+        )
+    except Exception as read_error:
+        logger.warning("Failed to read dataset rows: %s", read_error)
+        result_table = pa.table(
+            {
+                "error": ["Unable to read dataset"],
+                "dataset": [uri],
+                "details": [f"Error: {str(read_error)[:200]}"],
+            }
+        )
+        total_count = 1
 
-                if column_list:
-                    available_columns = [col for col in column_list if col in arrow_table.column_names]
-                    if available_columns:
-                        arrow_table = arrow_table.select(available_columns)
+    rows = []
+    for row_index in range(result_table.num_rows):
+        row = {}
+        for column_index, column_name in enumerate(result_table.column_names):
+            try:
+                value = result_table.column(column_index)[row_index]
+                row[column_name] = serialize_arrow_value(value)
+            except Exception as serialize_error:
+                logger.warning(
+                    "Failed to serialize column %s at row %s: %s",
+                    column_name,
+                    row_index,
+                    serialize_error,
+                )
+                row[column_name] = {"error": "Failed to read value"}
+        rows.append(row)
 
-                result_table = arrow_table.slice(offset, limit)
+    return {
+        "rows": rows,
+        "total": total_count,
+        "limit": limit,
+        "offset": offset,
+    }
 
-        except Exception as read_error:
-            # Graceful degradation: any dataset that fails to read (corruption,
-            # format error, unreadable bytes) returns a single informational row
-            # instead of a 500.
-            logger.warning(f"Failed to read rows from {dataset_name}, falling back to informational response: {read_error}")
 
-            error_schema = pa.schema([
-                pa.field("error", pa.string()),
-                pa.field("dataset", pa.string()),
-                pa.field("details", pa.string())
-            ])
-            error_data = [
-                ["Unable to read dataset"],
-                [dataset_name],
-                [f"Error: {str(read_error)[:200]}"]
-            ]
-            result_table = pa.Table.from_arrays(error_data, schema=error_schema)
-            total_count = 1
-
-        rows = []
-        for i in range(result_table.num_rows):
-            row = {}
-            for j, column_name in enumerate(result_table.column_names):
-                try:
-                    value = result_table.column(j)[i]
-                    row[column_name] = serialize_arrow_value(value)
-                except Exception as serialize_error:
-                    logger.warning(f"Failed to serialize column {column_name} at row {i}: {serialize_error}")
-                    row[column_name] = {"error": "Failed to read value"}
-            rows.append(row)
-
-        return {
-            "rows": rows,
-            "total": total_count,
-            "limit": limit,
-            "offset": offset
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting rows for {dataset_name}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get dataset rows")
-
-@app.get("/datasets/{dataset_name}/vector/preview")
+@app.get("/dataset/vector/preview")
 def get_vector_preview(
-    dataset_name: str,
-    column: str,
-    limit: int = Query(default=100, le=MAX_LIMIT)
+    uri: str = Query(min_length=1),
+    column: str = Query(min_length=1),
+    limit: int = Query(default=100, ge=1, le=MAX_LIMIT),
 ):
-    if not validate_dataset_name(dataset_name):
-        raise HTTPException(status_code=400, detail="Invalid dataset name")
+    dataset = open_dataset(uri)
+    schema = dataset.schema
+    if column not in schema.names:
+        raise HTTPException(status_code=400, detail=f"Column '{column}' not found")
 
-    try:
-        db = get_lance_connection()
-        table = db.open_table(dataset_name)
+    field = schema.field(column)
+    if not (
+        (pa.types.is_list(field.type) or pa.types.is_fixed_size_list(field.type))
+        and pa.types.is_floating(field.type.value_type)
+    ):
+        raise HTTPException(
+            status_code=400, detail=f"Column '{column}' is not a vector column"
+        )
 
-        if column not in [field.name for field in table.schema]:
-            raise HTTPException(status_code=400, detail=f"Column '{column}' not found")
+    row_count = min(limit, dataset.count_rows())
+    result = dataset.take(list(range(row_count)), columns=[column])
+    vectors = result.column(0).to_pylist()
+    valid_vectors = [vector for vector in vectors if vector is not None]
+    if not valid_vectors:
+        return {"stats": None, "preview": []}
 
-        field = next(field for field in table.schema if field.name == column)
-        if not ((pa.types.is_list(field.type) or pa.types.is_fixed_size_list(field.type)) and pa.types.is_floating(field.type.value_type)):
-            raise HTTPException(status_code=400, detail=f"Column '{column}' is not a vector column")
-
-        result = table.to_arrow().select([column]).slice(0, limit)
-        vectors = result.column(0).to_pylist()
-
-        valid_vectors = [v for v in vectors if v is not None]
-        if not valid_vectors:
-            return {"stats": None, "preview": []}
-
-        all_values = [val for vec in valid_vectors for val in vec]
-
-        stats = {
-            "count": len(valid_vectors),
-            "dim": len(valid_vectors[0]) if valid_vectors else 0,
-            "min": min(all_values) if all_values else 0,
-            "max": max(all_values) if all_values else 0,
-            "mean": sum(all_values) / len(all_values) if all_values else 0
+    all_values = [value for vector in valid_vectors for value in vector]
+    stats = {
+        "count": len(valid_vectors),
+        "dim": len(valid_vectors[0]),
+        "min": min(all_values) if all_values else 0,
+        "max": max(all_values) if all_values else 0,
+        "mean": sum(all_values) / len(all_values) if all_values else 0,
+    }
+    preview = [
+        {
+            "norm": float(sum(value * value for value in vector) ** 0.5),
+            "sample": vector[:32],
         }
-
-        preview = []
-        for vec in valid_vectors[:20]:
-            if vec:
-                preview.append({
-                    "norm": float(sum(x*x for x in vec) ** 0.5),
-                    "sample": vec[:32]
-                })
-
-        return {"stats": stats, "preview": preview}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting vector preview for {dataset_name}.{column}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get vector preview")
+        for vector in valid_vectors[:20]
+        if vector
+    ]
+    return {"stats": stats, "preview": preview}
 
 # Mount static files - use vanilla version by default
 # In production, Docker copies vanilla files to /web
@@ -459,7 +383,6 @@ if __name__ == "__main__":
 
     # Log version information on startup
     logger.info(f"Lance Data Viewer v{APP_VERSION}")
-    logger.info(f"LanceDB: {lancedb.__version__}, PyArrow: {pa.__version__}")
-    logger.info(f"Data path: {DATA_PATH}")
+    logger.info(f"Lance: {lance.__version__}, PyArrow: {pa.__version__}")
 
     uvicorn.run(app, host="0.0.0.0", port=8080)

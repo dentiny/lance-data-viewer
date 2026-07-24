@@ -11,13 +11,15 @@ class LanceViewer {
         this.initializeElements();
         this.setupEventListeners();
         this.checkHealth();
-        this.loadDatasets();
     }
 
     initializeElements() {
         this.elements = {
             healthStatus: document.getElementById('healthStatus'),
-            datasetList: document.getElementById('datasetList'),
+            datasetForm: document.getElementById('datasetForm'),
+            datasetUri: document.getElementById('datasetUri'),
+            connectDataset: document.getElementById('connectDataset'),
+            connectionStatus: document.getElementById('connectionStatus'),
             datasetHeader: document.getElementById('datasetHeader'),
             datasetTitle: document.getElementById('datasetTitle'),
             columnSection: document.getElementById('columnSection'),
@@ -43,6 +45,10 @@ class LanceViewer {
     }
 
     setupEventListeners() {
+        this.elements.datasetForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            this.connectToDataset();
+        });
         this.elements.prevPage.addEventListener('click', () => this.previousPage());
         this.elements.nextPage.addEventListener('click', () => this.nextPage());
         this.elements.pageSize.addEventListener('change', (e) => {
@@ -75,12 +81,12 @@ class LanceViewer {
             const data = await response.json();
             if (data.ok) {
                 // Show Lance version prominently along with app version
-                const lanceVersion = data.lancedb_version || 'unknown';
+                const lanceVersion = data.lance_version || 'unknown';
                 const pyarrowVersion = data.pyarrow_version || 'unknown';
                 this.elements.healthStatus.innerHTML = `
                     <div class="version-info">
                         <div class="app-version">Lance Data Viewer v${data.app_version}</div>
-                        <div class="lance-version">LanceDB ${lanceVersion} • PyArrow ${pyarrowVersion}</div>
+                        <div class="lance-version">Lance ${lanceVersion} • PyArrow ${pyarrowVersion}</div>
                     </div>
                 `;
                 this.elements.healthStatus.className = 'health-status healthy';
@@ -93,56 +99,59 @@ class LanceViewer {
         }
     }
 
-    async loadDatasets() {
+    async connectToDataset() {
+        const uri = this.elements.datasetUri.value.trim();
+        if (!uri) {
+            this.setConnectionStatus('Enter a dataset URI.', 'error');
+            return;
+        }
+
+        this.elements.connectDataset.disabled = true;
+        this.setConnectionStatus('Connecting...');
+
         try {
-            const response = await fetch(`${this.apiBase}/datasets`);
+            const params = new URLSearchParams({ uri });
+            const response = await fetch(`${this.apiBase}/dataset?${params}`);
             if (!response.ok) {
-                throw new Error(`API error: ${response.status} ${response.statusText}`);
-            }
-            const data = await response.json();
-
-            this.elements.datasetList.innerHTML = '';
-
-            if (data.datasets.length === 0) {
-                this.elements.datasetList.innerHTML = '<div class="loading">No datasets found</div>';
-                return;
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.detail || `API error: ${response.status}`);
             }
 
-            data.datasets.forEach(dataset => {
-                const item = document.createElement('div');
-                item.className = 'dataset-item';
-                item.textContent = dataset;
-                item.addEventListener('click', () => this.selectDataset(dataset));
-                this.elements.datasetList.appendChild(item);
-            });
+            this.currentDataset = uri;
+            this.currentPage = 0;
+            this.elements.datasetTitle.textContent = this.datasetLabel(uri);
+            this.elements.datasetTitle.title = uri;
+            this.elements.datasetHeader.style.display = 'block';
+
+            this.allColumns = [];
+            this.selectedColumns = [];
+            await Promise.all([
+                this.loadMetadata(),
+                this.loadData()
+            ]);
+            this.setConnectionStatus(`Connected to ${uri}`, 'connected');
         } catch (error) {
-            this.elements.datasetList.innerHTML = '<div class="error">Failed to load datasets</div>';
+            this.currentDataset = null;
+            this.setConnectionStatus(error.message, 'error');
+        } finally {
+            this.elements.connectDataset.disabled = false;
         }
     }
 
-    async selectDataset(datasetName) {
-        document.querySelectorAll('.dataset-item').forEach(item => {
-            item.classList.remove('active');
-        });
+    datasetLabel(uri) {
+        const parts = uri.replace(/\/+$/, '').split('/');
+        return parts[parts.length - 1] || uri;
+    }
 
-        event.target.classList.add('active');
-
-        this.currentDataset = datasetName;
-        this.currentPage = 0;
-        this.allColumns = [];
-        this.selectedColumns = [];
-        this.elements.datasetTitle.textContent = datasetName;
-        this.elements.datasetHeader.style.display = 'block';
-
-        await Promise.all([
-            this.loadMetadata(),
-            this.loadData()
-        ]);
+    setConnectionStatus(message, state = '') {
+        this.elements.connectionStatus.textContent = message;
+        this.elements.connectionStatus.className = `connection-status ${state}`.trim();
     }
 
     async loadMetadata() {
         try {
-            const response = await fetch(`${this.apiBase}/datasets/${this.currentDataset}/metadata`);
+            const params = new URLSearchParams({ uri: this.currentDataset });
+            const response = await fetch(`${this.apiBase}/dataset/metadata?${params}`);
             if (!response.ok) {
                 throw new Error(`API error: ${response.status} ${response.statusText}`);
             }
@@ -165,7 +174,6 @@ class LanceViewer {
 
             let typeDisplay;
             if (isVector) {
-                // Check if this is a CLIP vector
                 if (field.type.includes('[512]')) {
                     typeDisplay = `${field.name}: CLIP vector (512-dim float)`;
                 } else {
@@ -227,6 +235,7 @@ class LanceViewer {
 
         try {
             const params = new URLSearchParams({
+                uri: this.currentDataset,
                 limit: this.pageSize.toString(),
                 offset: (this.currentPage * this.pageSize).toString()
             });
@@ -235,7 +244,7 @@ class LanceViewer {
                 params.append('columns', this.selectedColumns.join(','));
             }
 
-            const response = await fetch(`${this.apiBase}/datasets/${this.currentDataset}/rows?${params}`);
+            const response = await fetch(`${this.apiBase}/dataset/rows?${params}`);
             if (!response.ok) {
                 throw new Error(`API error: ${response.status} ${response.statusText}`);
             }
@@ -245,12 +254,10 @@ class LanceViewer {
             this.renderTable(data.rows);
             this.updatePagination();
             this.hideLoading();
-            return true;
 
         } catch (error) {
             this.hideLoading();
             this.showError('Failed to load data');
-            return false;
         }
     }
 

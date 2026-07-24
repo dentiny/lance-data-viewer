@@ -8,7 +8,7 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi==0.141.1",
     "uvicorn[standard]==0.24.0",
-    "lancedb==0.3.4",
+    "pylance",
     "pyarrow==14.0.1",
     "python-multipart==0.0.6",
 ]
