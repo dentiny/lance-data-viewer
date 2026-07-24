@@ -97,24 +97,33 @@ header h1 {
     font-size: 1rem;
 }
 
-.dataset-list .dataset-item {
-    padding: 12px 16px;
-    margin: 4px 0;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    border: 1px solid transparent;
+.remote-dataset-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 
-.dataset-list .dataset-item:hover {
-    background-color: #f8f9fa;
-    border-color: #dee2e6;
+.remote-dataset-form input {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
 }
 
-.dataset-list .dataset-item.active {
-    background-color: #3498db;
+.remote-dataset-form button {
+    padding: 8px 12px;
+    border: 0;
+    border-radius: 4px;
+    background: #3498db;
     color: white;
-    border-color: #2980b9;
+    cursor: pointer;
+}
+
+.remote-dataset-status {
+    min-height: 1.4em;
+    margin-top: 6px;
+    font-size: 0.85rem;
+    color: #495057;
 }
 
 .content {

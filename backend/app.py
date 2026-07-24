@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 import json
 
+import lance
 import lancedb
 import pyarrow as pa
 from packaging.version import parse as parse_version
@@ -64,6 +65,13 @@ def get_lance_connection():
     if not DATA_PATH.exists():
         raise HTTPException(status_code=500, detail="Data path not found")
     return lancedb.connect(str(DATA_PATH))
+
+def open_remote_dataset(uri: str):
+    try:
+        return lance.dataset(uri.strip())
+    except Exception as error:
+        logger.warning("Unable to open remote dataset: %s", error)
+        raise HTTPException(status_code=400, detail="Unable to open dataset URI")
 
 def serialize_arrow_value(value):
     try:
@@ -404,6 +412,123 @@ async def get_vector_preview(
     except Exception as e:
         logger.error(f"Error getting vector preview for {dataset_name}.{column}: {e}")
         raise HTTPException(status_code=500, detail="Failed to get vector preview")
+
+@app.get("/dataset/schema")
+async def get_remote_dataset_schema(uri: str = Query(min_length=1)):
+    schema = open_remote_dataset(uri).schema
+    fields = []
+    for field in schema:
+        field_info = {
+            "name": field.name,
+            "type": str(field.type),
+            "nullable": field.nullable,
+        }
+        if (
+            (pa.types.is_list(field.type) or pa.types.is_fixed_size_list(field.type))
+            and pa.types.is_floating(field.type.value_type)
+        ):
+            field_info["vector_dim"] = None
+        fields.append(field_info)
+
+    metadata = {
+        key.decode("utf-8", errors="replace"): value.decode("utf-8", errors="replace")
+        for key, value in (schema.metadata or {}).items()
+    }
+    return {"fields": fields, "metadata": metadata}
+
+
+@app.get("/dataset/columns")
+async def get_remote_dataset_columns(uri: str = Query(min_length=1)):
+    schema = open_remote_dataset(uri).schema
+    columns = []
+    for field in schema:
+        is_vector = (
+            (pa.types.is_list(field.type) or pa.types.is_fixed_size_list(field.type))
+            and pa.types.is_floating(field.type.value_type)
+        )
+        column = {
+            "name": field.name,
+            "type": str(field.type),
+            "nullable": field.nullable,
+            "is_vector": is_vector,
+        }
+        if is_vector:
+            column["dim"] = None
+        columns.append(column)
+    return {"columns": columns}
+
+
+@app.get("/dataset/rows")
+async def get_remote_dataset_rows(
+    uri: str = Query(min_length=1),
+    limit: int = Query(default=50, ge=1, le=MAX_LIMIT),
+    offset: int = Query(default=0, ge=0),
+    columns: Optional[str] = Query(default=None),
+):
+    dataset = open_remote_dataset(uri)
+    schema = dataset.schema
+
+    column_list = None
+    if columns:
+        column_list = [column.strip() for column in columns.split(",") if column.strip()]
+        invalid_columns = [column for column in column_list if column not in schema.names]
+        if invalid_columns:
+            raise HTTPException(status_code=400, detail=f"Invalid columns: {invalid_columns}")
+
+    try:
+        total_count = dataset.count_rows()
+        end = min(offset + limit, total_count)
+        if offset >= total_count:
+            selected_fields = [
+                schema.field(name) for name in (column_list or schema.names)
+            ]
+            result_table = pa.table({
+                field.name: pa.array([], type=field.type)
+                for field in selected_fields
+            })
+        else:
+            result_table = dataset.take(
+                list(range(offset, end)),
+                columns=column_list,
+            )
+    except (AttributeError, TypeError):
+        result_table = dataset.to_table(columns=column_list).slice(offset, limit)
+        total_count = dataset.count_rows()
+    except Exception as read_error:
+        logger.warning(
+            "Failed to read remote dataset, returning informational row: %s",
+            read_error,
+        )
+        result_table = pa.table({
+            "error": ["Unable to read dataset"],
+            "dataset": [uri],
+            "details": [f"Error: {str(read_error)[:200]}"],
+        })
+        total_count = 1
+
+    rows = []
+    for row_index in range(result_table.num_rows):
+        row = {}
+        for column_index, column_name in enumerate(result_table.column_names):
+            try:
+                value = result_table.column(column_index)[row_index]
+                row[column_name] = serialize_arrow_value(value)
+            except Exception as serialize_error:
+                logger.warning(
+                    "Failed to serialize column %s at row %s: %s",
+                    column_name,
+                    row_index,
+                    serialize_error,
+                )
+                row[column_name] = {"error": "Failed to read value"}
+        rows.append(row)
+
+    return {
+        "rows": rows,
+        "total": total_count,
+        "limit": limit,
+        "offset": offset,
+    }
 
 # Mount static files - use vanilla version by default
 # In production, Docker copies vanilla files to /web

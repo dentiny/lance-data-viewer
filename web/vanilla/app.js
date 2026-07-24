@@ -1,6 +1,6 @@
 class LanceViewer {
     constructor() {
-        this.currentDataset = null;
+        this.currentDatasetUri = null;
         this.currentPage = 0;
         this.pageSize = 50;
         this.totalRows = 0;
@@ -11,13 +11,14 @@ class LanceViewer {
         this.initializeElements();
         this.setupEventListeners();
         this.checkHealth();
-        this.loadDatasets();
     }
 
     initializeElements() {
         this.elements = {
             healthStatus: document.getElementById('healthStatus'),
-            datasetList: document.getElementById('datasetList'),
+            remoteDatasetForm: document.getElementById('remoteDatasetForm'),
+            remoteDatasetUri: document.getElementById('remoteDatasetUri'),
+            remoteDatasetStatus: document.getElementById('remoteDatasetStatus'),
             datasetHeader: document.getElementById('datasetHeader'),
             datasetTitle: document.getElementById('datasetTitle'),
             columnSection: document.getElementById('columnSection'),
@@ -43,6 +44,10 @@ class LanceViewer {
     }
 
     setupEventListeners() {
+        this.elements.remoteDatasetForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            this.connectRemoteDataset();
+        });
         this.elements.prevPage.addEventListener('click', () => this.previousPage());
         this.elements.nextPage.addEventListener('click', () => this.nextPage());
         this.elements.pageSize.addEventListener('change', (e) => {
@@ -93,53 +98,39 @@ class LanceViewer {
         }
     }
 
-    async loadDatasets() {
-        try {
-            const response = await fetch(`${this.apiBase}/datasets`);
-            if (!response.ok) {
-                throw new Error(`API error: ${response.status} ${response.statusText}`);
-            }
-            const data = await response.json();
+    async connectRemoteDataset() {
+        const uri = this.elements.remoteDatasetUri.value.trim();
+        if (!uri) return;
 
-            this.elements.datasetList.innerHTML = '';
-
-            if (data.datasets.length === 0) {
-                this.elements.datasetList.innerHTML = '<div class="loading">No datasets found</div>';
-                return;
-            }
-
-            data.datasets.forEach(dataset => {
-                const item = document.createElement('div');
-                item.className = 'dataset-item';
-                item.textContent = dataset;
-                item.addEventListener('click', () => this.selectDataset(dataset));
-                this.elements.datasetList.appendChild(item);
-            });
-        } catch (error) {
-            this.elements.datasetList.innerHTML = '<div class="error">Failed to load datasets</div>';
-        }
-    }
-
-    async selectDataset(datasetName) {
         document.querySelectorAll('.dataset-item').forEach(item => {
             item.classList.remove('active');
         });
-
-        event.target.classList.add('active');
-
-        this.currentDataset = datasetName;
+        this.currentDatasetUri = uri;
         this.currentPage = 0;
-        this.elements.datasetTitle.textContent = datasetName;
-        this.elements.datasetHeader.style.display = 'block';
+        this.elements.remoteDatasetStatus.textContent = 'Connecting...';
 
-        await this.loadSchema();
+        if (!await this.loadSchema()) {
+            this.currentDatasetUri = null;
+            this.elements.remoteDatasetStatus.textContent = 'Unable to open dataset';
+            return;
+        }
+
+        this.elements.datasetTitle.textContent = uri.split('/').filter(Boolean).pop() || uri;
+        this.elements.datasetTitle.title = uri;
+        this.elements.datasetHeader.style.display = 'block';
+        this.elements.remoteDatasetStatus.textContent = 'Connected';
         await this.loadColumns();
         await this.loadData();
     }
 
+    datasetUrl(resource, params = new URLSearchParams()) {
+        params.set('uri', this.currentDatasetUri);
+        return `${this.apiBase}/dataset/${resource}?${params}`;
+    }
+
     async loadSchema() {
         try {
-            const response = await fetch(`${this.apiBase}/datasets/${this.currentDataset}/schema`);
+            const response = await fetch(this.datasetUrl('schema'));
             if (!response.ok) {
                 throw new Error(`API error: ${response.status} ${response.statusText}`);
             }
@@ -168,14 +159,16 @@ class LanceViewer {
             });
 
             this.elements.schemaSection.style.display = 'block';
+            return true;
         } catch (error) {
             this.showError('Failed to load schema');
+            return false;
         }
     }
 
     async loadColumns() {
         try {
-            const response = await fetch(`${this.apiBase}/datasets/${this.currentDataset}/columns`);
+            const response = await fetch(this.datasetUrl('columns'));
             if (!response.ok) {
                 throw new Error(`API error: ${response.status} ${response.statusText}`);
             }
@@ -222,7 +215,7 @@ class LanceViewer {
     }
 
     async loadData() {
-        if (!this.currentDataset) return;
+        if (!this.currentDatasetUri) return;
 
         this.showLoading();
 
@@ -236,7 +229,7 @@ class LanceViewer {
                 params.append('columns', this.selectedColumns.join(','));
             }
 
-            const response = await fetch(`${this.apiBase}/datasets/${this.currentDataset}/rows?${params}`);
+            const response = await fetch(this.datasetUrl('rows', params));
             if (!response.ok) {
                 throw new Error(`API error: ${response.status} ${response.statusText}`);
             }

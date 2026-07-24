@@ -18,10 +18,18 @@
         <main class="main-content">
             <aside class="sidebar">
                 <div class="sidebar-section">
-                    <h3>Datasets</h3>
-                    <div class="dataset-list" id="datasetList">
-                        <div class="loading">Loading datasets...</div>
-                    </div>
+                    <h3>Open Dataset URI</h3>
+                    <form class="remote-dataset-form" id="remoteDatasetForm">
+                        <input
+                            id="remoteDatasetUri"
+                            type="text"
+                            placeholder="s3://bucket/path/table.lance"
+                            aria-label="Dataset URI"
+                            required
+                        >
+                        <button type="submit">Connect</button>
+                    </form>
+                    <div class="remote-dataset-status" id="remoteDatasetStatus"></div>
                 </div>
 
                 <div class="sidebar-section" id="columnSection" style="display: none;">

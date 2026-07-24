@@ -9,6 +9,7 @@ dependencies = [
     "fastapi==0.104.1",
     "uvicorn[standard]==0.24.0",
     "lancedb==0.3.4",
+    "pylance==0.8.17",
     "pyarrow==14.0.1",
     "python-multipart==0.0.6",
 ]

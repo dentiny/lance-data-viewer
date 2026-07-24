@@ -8,6 +8,7 @@ path for unreadable datasets.
 import base64
 
 import lancedb
+import pyarrow as pa
 import pytest
 from packaging.version import parse as parse_version
 
@@ -41,6 +42,68 @@ def test_datasets_lists_created_tables(client):
     names = response.json()["datasets"]
     assert "sample" in names
     assert "broken" in names
+
+
+# /dataset/*?uri=
+
+def test_remote_dataset_uri_is_required(client):
+    assert client.get("/dataset/schema").status_code == 422
+    assert client.get("/dataset/columns").status_code == 422
+    assert client.get("/dataset/rows").status_code == 422
+
+
+def test_remote_dataset_invalid_uri_returns_400(client):
+    response = client.get("/dataset/schema", params={"uri": "/does/not/exist"})
+    assert response.status_code == 400
+
+
+def test_remote_dataset_schema_and_columns(client, sample_uri):
+    schema = client.get("/dataset/schema", params={"uri": sample_uri})
+    assert schema.status_code == 200
+    assert {field["name"] for field in schema.json()["fields"]} == {
+        "id", "text", "score", "blob", "vec", "embedding"
+    }
+
+    columns = client.get("/dataset/columns", params={"uri": sample_uri})
+    assert columns.status_code == 200
+    by_name = {column["name"]: column for column in columns.json()["columns"]}
+    assert by_name["vec"]["is_vector"] is True
+    assert by_name["id"]["is_vector"] is False
+
+
+def test_remote_dataset_rows(client, sample_uri):
+    response = client.get(
+        "/dataset/rows",
+        params={"uri": sample_uri, "limit": 2, "offset": 1, "columns": "id,text"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == ROWS
+    assert body["limit"] == 2
+    assert body["offset"] == 1
+    assert body["rows"] == [
+        {"id": 1, "text": "row 1"},
+        {"id": 2, "text": "row 2"},
+    ]
+
+
+def test_remote_dataset_uri_is_not_rewritten(client, monkeypatch):
+    import app as app_module
+
+    requested = []
+
+    class EmptyDataset:
+        schema = pa.schema([])
+
+    def open_dataset(uri):
+        requested.append(uri)
+        return EmptyDataset()
+
+    monkeypatch.setattr(app_module.lance, "dataset", open_dataset)
+    uri = "s3://example-bucket/path/table.lance"
+    response = client.get("/dataset/schema", params={"uri": uri})
+    assert response.status_code == 200
+    assert requested == [uri]
 
 
 # /datasets/{name}/schema

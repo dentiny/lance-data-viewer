@@ -63,6 +63,11 @@ def data_dir(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
+def sample_uri(data_dir):
+    return str(data_dir / "sample.lance")
+
+
+@pytest.fixture(scope="session")
 def vec_nulls_preserved(data_dir):
     """Lance format v1 (lancedb 0.3.x/0.5) stores a null list as an empty
     list. Detect what the installed version actually does so tests can
