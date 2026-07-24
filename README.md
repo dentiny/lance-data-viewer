@@ -148,8 +148,10 @@ Available endpoints:
 - Recursive rendering for nested structs and lists
 - Read-only operation
 
-Binary values are currently serialized as UTF-8 when possible and base64
-otherwise. Image, audio, and video previews are not implemented yet.
+Binary values are detected from their file signatures. Recognized images,
+audio, and videos are rendered with native browser controls; unknown binary
+values retain the existing UTF-8 or base64 fallback. Common formats include
+PNG, JPEG, GIF, WebP, WAV, MP3, FLAC, Ogg, MP4, WebM, AVI, and MPEG.
 
 ## Development
 
