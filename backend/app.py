@@ -242,21 +242,12 @@ async def get_dataset_rows(
 
     try:
         total_count = dataset.count_rows()
-        end = min(offset + limit, total_count)
-        if offset >= total_count:
-            selected = column_list or schema.names
-            result_table = pa.table(
-                {
-                    name: pa.array([], type=schema.field(name).type)
-                    for name in selected
-                }
-            )
-        else:
-            indices = list(range(offset, end))
-            try:
-                result_table = dataset.take(indices, columns=column_list)
-            except (AttributeError, TypeError):
-                result_table = dataset.to_table(columns=column_list).slice(offset, limit)
+        result_table = dataset.scanner(
+            columns=column_list,
+            offset=offset,
+            limit=limit,
+            blob_handling="all_binary",
+        ).to_table()
         logger.info(
             "Read %s rows (offset=%s, limit=%s) from dataset",
             result_table.num_rows,

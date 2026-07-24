@@ -5,6 +5,77 @@ import numpy as np
 import pyarrow as pa
 
 
+def detect_media_type(raw: bytes):
+    """Return (media category, MIME type) from common file signatures."""
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image", "image/png"
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "image", "image/jpeg"
+    if raw.startswith((b"GIF87a", b"GIF89a")):
+        return "image", "image/gif"
+    if raw.startswith(b"BM"):
+        return "image", "image/bmp"
+    if raw.startswith((b"II*\x00", b"MM\x00*")):
+        return "image", "image/tiff"
+
+    if len(raw) >= 12 and raw.startswith(b"RIFF"):
+        container = raw[8:12]
+        if container == b"WEBP":
+            return "image", "image/webp"
+        if container == b"WAVE":
+            return "audio", "audio/wav"
+        if container == b"AVI ":
+            return "video", "video/x-msvideo"
+
+    if raw.startswith(b"fLaC"):
+        return "audio", "audio/flac"
+    if raw.startswith(b"OggS"):
+        return "audio", "audio/ogg"
+    if raw.startswith(b"ID3") or (
+        len(raw) >= 128 and raw[0] == 0xFF and raw[1] & 0xE0 == 0xE0
+    ):
+        return "audio", "audio/mpeg"
+
+    if len(raw) >= 12 and raw[4:8] == b"ftyp":
+        brands = raw[8:32]
+        if any(brand in brands for brand in (b"avif", b"avis")):
+            return "image", "image/avif"
+        if any(brand in brands for brand in (b"heic", b"heix")):
+            return "image", "image/heic"
+        if any(brand in brands for brand in (b"M4A ", b"M4B ")):
+            return "audio", "audio/mp4"
+        return "video", "video/mp4"
+    if raw.startswith(b"\x1aE\xdf\xa3"):
+        return "video", "video/webm"
+    if raw.startswith((b"\x00\x00\x01\xba", b"\x00\x00\x01\xb3")):
+        return "video", "video/mpeg"
+
+    return None
+
+
+def _serialize_binary(raw):
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        return raw
+
+    media = detect_media_type(raw)
+    if media:
+        media_type, mime_type = media
+        return {
+            "type": "media",
+            "media_type": media_type,
+            "mime_type": mime_type,
+            "size": len(raw),
+            "base64": base64.b64encode(raw).decode("ascii"),
+        }
+
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return base64.b64encode(raw).decode("ascii")
+
+
 def _serialize_temporal(obj):
     """Convert temporal types to string representation."""
     if obj is None:
@@ -22,15 +93,7 @@ def _serialize_pyarrow_scalar(obj):
         return None
 
     if pa.types.is_binary(obj.type) or pa.types.is_large_binary(obj.type):
-        raw = obj.as_py()
-        if raw is None:
-            return None
-        if isinstance(raw, str):
-            return raw
-        try:
-            return raw.decode("utf-8")
-        except UnicodeDecodeError:
-            return base64.b64encode(raw).decode("utf-8")
+        return _serialize_binary(obj.as_py())
 
     if pa.types.is_temporal(obj.type):
         return _serialize_temporal(obj.as_py())
@@ -71,20 +134,9 @@ def _serialize_container(obj):
 def _serialize_basic_types(obj):
     """Convert basic Python types to JSON-serializable format."""
     if isinstance(obj, bytes):
-        try:
-            return obj.decode("utf-8")
-        except UnicodeDecodeError:
-            return base64.b64encode(obj).decode("utf-8")
+        return _serialize_binary(obj)
     if isinstance(obj, pa.BinaryScalar):
-        raw = obj.as_py()
-        if raw is None:
-            return None
-        if isinstance(raw, str):
-            return raw
-        try:
-            return raw.decode("utf-8")
-        except UnicodeDecodeError:
-            return base64.b64encode(raw).decode("utf-8")
+        return _serialize_binary(obj.as_py())
     if isinstance(obj, (datetime, date, time)):
         return obj.isoformat()
     if isinstance(obj, timedelta):
