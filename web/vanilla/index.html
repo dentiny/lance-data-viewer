@@ -34,6 +34,17 @@
                     </div>
                 </div>
 
+                <div class="sidebar-section" id="sqlSection" style="display: none;">
+                    <h3>SQL Query</h3>
+                    <form class="sql-query" id="sqlForm">
+                        <textarea id="sqlInput" rows="6" spellcheck="false">SELECT * FROM dataset LIMIT 50</textarea>
+                        <button id="runSql" type="submit">Run SQL</button>
+                    </form>
+                    <div class="sql-status" id="sqlStatus">
+                        Query the connected dataset as <code>dataset</code>.
+                    </div>
+                </div>
+
                 <div class="sidebar-section" id="columnSection" style="display: none;">
                     <h3>Columns</h3>
                     <div class="column-selector">
@@ -54,6 +65,15 @@
             </aside>
 
             <section class="content">
+                <div class="empty-state" id="emptyState">
+                    <div class="empty-state-icon">L</div>
+                    <h2>Explore a Lance dataset</h2>
+                    <p>Connect a local path or object-store URI to inspect its schema, browse rows, preview media, and run SQL.</p>
+                    <div class="empty-state-examples">
+                        <code>/data/events.lance</code>
+                        <code>s3://bucket/path/events.lance</code>
+                    </div>
+                </div>
                 <div class="dataset-header" id="datasetHeader" style="display: none;">
                     <div class="header-row">
                         <h2 id="datasetTitle">Select a dataset</h2>
