@@ -187,6 +187,27 @@ def serialize_arrow_value(value):
         logger.warning(f"Error serializing value: {e}")
         return {"error": f"Serialization failed: {str(e)}"}
 
+
+def serialize_arrow_table(table):
+    rows = []
+    for row_index in range(table.num_rows):
+        row = {}
+        for column_index, column_name in enumerate(table.column_names):
+            try:
+                value = table.column(column_index)[row_index]
+                row[column_name] = serialize_arrow_value(value)
+            except Exception as serialize_error:
+                logger.warning(
+                    "Failed to serialize column %s at row %s: %s",
+                    column_name,
+                    row_index,
+                    serialize_error,
+                )
+                row[column_name] = {"error": "Failed to read value"}
+        rows.append(row)
+    return rows
+
+
 @app.get("/healthz")
 async def health_check():
     try:
@@ -196,6 +217,7 @@ async def health_check():
         compat = {
             "vector_preview": True,
             "remote_dataset_uri": True,
+            "sql": True,
         }
 
         build_tag = f"app-{APP_VERSION}_lance-{lance_version}"
@@ -288,28 +310,54 @@ def get_dataset_rows(
         )
         total_count = 1
 
-    rows = []
-    for row_index in range(result_table.num_rows):
-        row = {}
-        for column_index, column_name in enumerate(result_table.column_names):
-            try:
-                value = result_table.column(column_index)[row_index]
-                row[column_name] = serialize_arrow_value(value)
-            except Exception as serialize_error:
-                logger.warning(
-                    "Failed to serialize column %s at row %s: %s",
-                    column_name,
-                    row_index,
-                    serialize_error,
-                )
-                row[column_name] = {"error": "Failed to read value"}
-        rows.append(row)
-
     return {
-        "rows": rows,
+        "rows": serialize_arrow_table(result_table),
         "total": total_count,
         "limit": limit,
         "offset": offset,
+    }
+
+
+@app.get("/dataset/sql")
+async def query_dataset_sql(
+    uri: str = Query(min_length=1),
+    query: str = Query(min_length=1),
+    limit: int = Query(default=500, ge=1, le=MAX_LIMIT),
+):
+    statement = query.strip().rstrip(";").strip()
+    if not statement.lower().startswith(("select", "with")):
+        raise HTTPException(
+            status_code=400,
+            detail="Only SELECT or WITH queries are supported",
+        )
+
+    dataset = open_dataset(uri)
+    limited_query = (
+        f"SELECT * FROM ({statement}) AS viewer_query LIMIT {limit + 1}"
+    )
+    try:
+        result = (
+            dataset.sql(limited_query)
+            .build()
+            .to_stream_reader()
+            .read_all()
+        )
+    except Exception as error:
+        logger.warning("SQL query failed: %s", error)
+        raise HTTPException(
+            status_code=400,
+            detail=f"SQL query failed: {str(error)[:500]}",
+        )
+
+    truncated = result.num_rows > limit
+    if truncated:
+        result = result.slice(0, limit)
+    return {
+        "rows": serialize_arrow_table(result),
+        "columns": result.column_names,
+        "count": result.num_rows,
+        "truncated": truncated,
+        "limit": limit,
     }
 
 

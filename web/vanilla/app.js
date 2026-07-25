@@ -20,6 +20,12 @@ class LanceViewer {
             datasetUri: document.getElementById('datasetUri'),
             connectDataset: document.getElementById('connectDataset'),
             connectionStatus: document.getElementById('connectionStatus'),
+            sqlSection: document.getElementById('sqlSection'),
+            sqlForm: document.getElementById('sqlForm'),
+            sqlInput: document.getElementById('sqlInput'),
+            runSql: document.getElementById('runSql'),
+            sqlStatus: document.getElementById('sqlStatus'),
+            emptyState: document.getElementById('emptyState'),
             datasetHeader: document.getElementById('datasetHeader'),
             datasetTitle: document.getElementById('datasetTitle'),
             columnSection: document.getElementById('columnSection'),
@@ -48,6 +54,10 @@ class LanceViewer {
         this.elements.datasetForm.addEventListener('submit', (event) => {
             event.preventDefault();
             this.connectToDataset();
+        });
+        this.elements.sqlForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            this.runSqlQuery();
         });
         this.elements.prevPage.addEventListener('click', () => this.previousPage());
         this.elements.nextPage.addEventListener('click', () => this.nextPage());
@@ -122,6 +132,8 @@ class LanceViewer {
             this.elements.datasetTitle.textContent = this.datasetLabel(uri);
             this.elements.datasetTitle.title = uri;
             this.elements.datasetHeader.style.display = 'block';
+            this.elements.emptyState.style.display = 'none';
+            this.elements.sqlSection.style.display = 'block';
 
             this.allColumns = [];
             this.selectedColumns = [];
@@ -146,6 +158,59 @@ class LanceViewer {
     setConnectionStatus(message, state = '') {
         this.elements.connectionStatus.textContent = message;
         this.elements.connectionStatus.className = `connection-status ${state}`.trim();
+    }
+
+    async runSqlQuery() {
+        if (!this.currentDataset) return;
+        const query = this.elements.sqlInput.value.trim();
+        if (!query) {
+            this.setSqlStatus('Enter a SQL query.', 'error');
+            return;
+        }
+
+        this.elements.runSql.disabled = true;
+        this.setSqlStatus('Running query...');
+        this.showLoading();
+
+        try {
+            const params = new URLSearchParams({
+                uri: this.currentDataset,
+                query,
+                limit: '1000'
+            });
+            const response = await fetch(`${this.apiBase}/dataset/sql?${params}`);
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.detail || `API error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            this.renderTable(data.rows);
+            this.totalRows = data.count;
+            this.elements.prevPage.disabled = true;
+            this.elements.nextPage.disabled = true;
+            this.elements.pageInfo.textContent = data.truncated
+                ? `Showing first ${data.count} SQL rows`
+                : `${data.count} SQL rows`;
+            this.hideLoading();
+            this.setSqlStatus(
+                data.truncated
+                    ? `Result capped at ${data.limit} rows.`
+                    : `Query returned ${data.count} rows.`,
+                'success'
+            );
+        } catch (error) {
+            this.hideLoading();
+            this.showError(error.message);
+            this.setSqlStatus(error.message, 'error');
+        } finally {
+            this.elements.runSql.disabled = false;
+        }
+    }
+
+    setSqlStatus(message, state = '') {
+        this.elements.sqlStatus.textContent = message;
+        this.elements.sqlStatus.className = `sql-status ${state}`.trim();
     }
 
     async loadMetadata() {
@@ -262,6 +327,7 @@ class LanceViewer {
     }
 
     renderTable(rows) {
+        this.elements.dataSection.style.display = 'block';
         if (rows.length === 0) {
             this.elements.tableBody.innerHTML = '<tr><td colspan="100%">No data found</td></tr>';
             return;

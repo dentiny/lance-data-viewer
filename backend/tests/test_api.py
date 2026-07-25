@@ -263,3 +263,52 @@ def test_vector_preview_validation(client, sample_uri):
     assert api_get(
         client, "/dataset/vector/preview", sample_uri
     ).status_code == 422
+
+
+def test_native_lance_sql(client, sample_uri):
+    response = api_get(
+        client,
+        "/dataset/sql",
+        sample_uri,
+        query="SELECT id, text FROM dataset WHERE id >= 8 ORDER BY id",
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["columns"] == ["id", "text"]
+    assert [row["id"] for row in body["rows"]] == [8, 9]
+    assert body["truncated"] is False
+
+
+def test_native_lance_sql_applies_result_cap(client, sample_uri):
+    body = api_get(
+        client,
+        "/dataset/sql",
+        sample_uri,
+        query="SELECT id FROM dataset ORDER BY id",
+        limit=3,
+    ).json()
+    assert [row["id"] for row in body["rows"]] == [0, 1, 2]
+    assert body["truncated"] is True
+    assert body["limit"] == 3
+
+
+def test_native_lance_sql_is_read_only(client, sample_uri):
+    response = api_get(
+        client,
+        "/dataset/sql",
+        sample_uri,
+        query="DELETE FROM dataset",
+    )
+    assert response.status_code == 400
+    assert "Only SELECT" in response.json()["detail"]
+
+
+def test_native_lance_sql_reports_query_errors(client, sample_uri):
+    response = api_get(
+        client,
+        "/dataset/sql",
+        sample_uri,
+        query="SELECT missing_column FROM dataset",
+    )
+    assert response.status_code == 400
+    assert "SQL query failed" in response.json()["detail"]

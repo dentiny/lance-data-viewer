@@ -126,6 +126,10 @@ curl --get http://localhost:8080/dataset/rows \
   --data-urlencode 'uri=s3://my-bucket/path/events.lance' \
   --data-urlencode 'limit=50' \
   --data-urlencode 'offset=0'
+
+curl --get http://localhost:8080/dataset/sql \
+  --data-urlencode 'uri=s3://my-bucket/path/events.lance' \
+  --data-urlencode 'query=SELECT * FROM dataset LIMIT 20'
 ```
 
 Available endpoints:
@@ -135,6 +139,7 @@ Available endpoints:
 - `GET /dataset/schema`
 - `GET /dataset/columns`
 - `GET /dataset/rows`
+- `GET /dataset/sql`
 - `GET /dataset/vector/preview`
 
 ## Features
@@ -143,6 +148,7 @@ Available endpoints:
 - Request-scoped connections suitable for concurrent users and replicas
 - Schema and column inspection
 - Server-side pagination and column filtering
+- Native `LanceDataset.sql()` queries against the `dataset` table
 - Fixed-size and variable-length vector visualization
 - CLIP-512 detection, statistics, sparklines, and tooltips
 - Recursive rendering for nested structs and lists
