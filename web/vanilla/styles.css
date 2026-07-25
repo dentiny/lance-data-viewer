@@ -141,6 +141,52 @@ header h1 {
     color: #dc3545;
 }
 
+.sql-query {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.sql-query textarea {
+    width: 100%;
+    padding: 10px;
+    resize: vertical;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+    font-size: 0.78rem;
+    line-height: 1.5;
+}
+
+.sql-query button {
+    padding: 9px 12px;
+    border: 0;
+    border-radius: 4px;
+    background: #2c3e50;
+    color: white;
+    cursor: pointer;
+}
+
+.sql-query button:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+.sql-status {
+    margin-top: 8px;
+    color: #6c757d;
+    font-size: 0.78rem;
+    overflow-wrap: anywhere;
+}
+
+.sql-status.success {
+    color: #198754;
+}
+
+.sql-status.error {
+    color: #dc3545;
+}
+
 .content {
     background: white;
     padding: 20px;
@@ -149,6 +195,57 @@ header h1 {
     overflow: hidden;
     display: flex;
     flex-direction: column;
+}
+
+.empty-state {
+    min-height: 520px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 14px;
+    padding: 48px;
+    text-align: center;
+    color: #6c757d;
+}
+
+.empty-state-icon {
+    width: 64px;
+    height: 64px;
+    display: grid;
+    place-items: center;
+    border-radius: 18px;
+    background: linear-gradient(135deg, #3498db, #6157d9);
+    box-shadow: 0 10px 24px rgba(52, 152, 219, 0.25);
+    color: white;
+    font-size: 2rem;
+    font-weight: 700;
+}
+
+.empty-state h2 {
+    color: #2c3e50;
+    font-size: 1.5rem;
+}
+
+.empty-state p {
+    max-width: 520px;
+    font-size: 0.95rem;
+}
+
+.empty-state-examples {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+}
+
+.empty-state-examples code {
+    padding: 7px 10px;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    background: #f8f9fa;
+    color: #495057;
+    font-size: 0.78rem;
 }
 
 .dataset-header {
