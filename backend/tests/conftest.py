@@ -41,6 +41,26 @@ def _sample_table() -> pa.Table:
     })
 
 
+def _media_list_table() -> pa.Table:
+    """A List<Blob> column matching multimodal datasets with many media items."""
+    blob_item = lance.blob_field("item")
+    media_type = pa.list_(blob_item)
+    media = [
+        b"\xff\xd8\xff\xe0jpeg-payload",
+        b"RIFF\x00\x00\x00\x00WAVEwav-payload",
+        b"\x00\x00\x00\x18ftypisommp4-payload",
+    ]
+    return pa.Table.from_arrays(
+        [
+            pa.ListArray.from_arrays(
+                pa.array([0, len(media)], type=pa.int32()),
+                lance.blob_array(media),
+            )
+        ],
+        schema=pa.schema([pa.field("media", media_type)]),
+    )
+
+
 def _corrupt_table(db_dir: Path, name: str) -> None:
     """Overwrite the data fragments of a table so reads fail but the
     manifest stays intact and open_table() still succeeds."""
@@ -55,6 +75,11 @@ def _corrupt_table(db_dir: Path, name: str) -> None:
 def data_dir(tmp_path_factory):
     path = tmp_path_factory.mktemp("lance-data")
     lance.write_dataset(_sample_table(), str(path / "sample.lance"))
+    lance.write_dataset(
+        _media_list_table(),
+        str(path / "media-list.lance"),
+        data_storage_version="2.3",
+    )
     lance.write_dataset(
         pa.table({"id": pa.array([1, 2, 3], type=pa.int64())}),
         str(path / "broken.lance"),
@@ -84,6 +109,11 @@ def client(data_dir):
 @pytest.fixture(scope="session")
 def sample_uri(data_dir):
     return str(data_dir / "sample.lance")
+
+
+@pytest.fixture(scope="session")
+def media_list_uri(data_dir):
+    return str(data_dir / "media-list.lance")
 
 
 @pytest.fixture(scope="session")
