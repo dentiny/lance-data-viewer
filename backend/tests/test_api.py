@@ -206,6 +206,22 @@ def test_rows_scalar_and_binary_serialization(client, sample_uri):
     assert rows[1]["blob"] == base64.b64encode(b"\xff\xfe\x01\x02").decode()
 
 
+def test_rows_materialize_media_in_blob_lists(client, media_list_uri):
+    rows = api_get(client, "/dataset/rows", media_list_uri).json()["rows"]
+
+    media = rows[0]["media"]
+    assert len(media) == 3
+    assert media[0]["type"] == "media"
+    assert media[0]["media_type"] == "image"
+    assert media[0]["mime_type"] == "image/jpeg"
+    assert media[1]["type"] == "media"
+    assert media[1]["media_type"] == "audio"
+    assert media[1]["mime_type"] == "audio/wav"
+    assert media[2]["type"] == "media"
+    assert media[2]["media_type"] == "video"
+    assert media[2]["mime_type"] == "video/mp4"
+
+
 def test_rows_vector_serialization(client, sample_uri):
     vector = api_get(client, "/dataset/rows", sample_uri).json()["rows"][0]["vec"]
     assert vector["type"] == "vector"
