@@ -125,7 +125,8 @@ curl --get http://localhost:8080/dataset/schema \
 curl --get http://localhost:8080/dataset/rows \
   --data-urlencode 'uri=s3://my-bucket/path/events.lance' \
   --data-urlencode 'limit=50' \
-  --data-urlencode 'offset=0'
+  --data-urlencode 'offset=0' \
+  --data-urlencode 'lazy_blobs=true'
 
 curl --get http://localhost:8080/dataset/cell \
   --data-urlencode 'uri=s3://my-bucket/path/events.lance' \
@@ -165,6 +166,8 @@ audio, and videos are rendered with native browser controls; unknown binary
 values retain the existing UTF-8 or base64 fallback. Common formats include
 PNG, JPEG, GIF, WebP, WAV, MP3, FLAC, Ogg, MP4, WebM, AVI, and MPEG.
 Blob-backed cells are loaded lazily as they approach the viewport.
+API clients that omit `lazy_blobs=true` receive materialized blob values for
+backward compatibility.
 
 ## Development
 

@@ -340,6 +340,7 @@ def get_dataset_rows(
     limit: int = Query(default=50, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
     columns: Optional[str] = Query(default=None),
+    lazy_blobs: bool = Query(default=False),
 ):
     dataset = open_dataset(uri)
     schema = dataset.schema
@@ -358,7 +359,9 @@ def get_dataset_rows(
             columns=column_list,
             offset=offset,
             limit=limit,
-            blob_handling="blobs_descriptions",
+            blob_handling=(
+                "blobs_descriptions" if lazy_blobs else "all_binary"
+            ),
         ).to_table()
         logger.info(
             "Read %s rows (offset=%s, limit=%s) from dataset",
@@ -381,7 +384,7 @@ def get_dataset_rows(
         "rows": serialize_arrow_table(
             result_table,
             row_offset=offset,
-            lazy_blobs=True,
+            lazy_blobs=lazy_blobs,
         ),
         "total": total_count,
         "limit": limit,

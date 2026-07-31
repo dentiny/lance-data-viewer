@@ -289,7 +289,8 @@ class LanceViewer {
             const params = new URLSearchParams({
                 uri: this.currentDataset,
                 limit: this.pageSize.toString(),
-                offset: (this.currentPage * this.pageSize).toString()
+                offset: (this.currentPage * this.pageSize).toString(),
+                lazy_blobs: 'true'
             });
 
             if (this.selectedColumns.length > 0 && this.selectedColumns.length < this.allColumns.length) {
