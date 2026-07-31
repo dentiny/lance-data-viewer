@@ -6,6 +6,7 @@ class LanceViewer {
         this.totalRows = 0;
         this.selectedColumns = [];
         this.allColumns = [];
+        this.lazyCellRequests = new Map();
         this.apiBase = window.location.origin;
 
         this.initializeElements();
@@ -122,6 +123,9 @@ class LanceViewer {
         try {
             this.currentDataset = uri;
             this.currentPage = 0;
+            this.allColumns = [];
+            this.selectedColumns = [];
+            this.lazyCellRequests.clear();
             const dataPromise = this.loadData();
             const params = new URLSearchParams({ uri });
             const response = await fetch(`${this.apiBase}/dataset?${params}`);
@@ -278,6 +282,7 @@ class LanceViewer {
     async loadData() {
         if (!this.currentDataset) return;
 
+        this.lazyCellRequests.clear();
         this.showLoading();
 
         try {
@@ -336,6 +341,8 @@ class LanceViewer {
                 if (value && typeof value === 'object') {
                     if (value.type === 'vector') {
                         this.renderVectorCell(td, value, column);
+                    } else if (value.type === 'blob_ref') {
+                        this.renderLazyBlob(td, value);
                     } else if (value.type === 'media') {
                         this.renderMediaCell(td, value);
                     } else {
@@ -352,6 +359,67 @@ class LanceViewer {
         });
 
         this.elements.dataSection.style.display = 'block';
+    }
+
+    renderLazyBlob(container, blobRef) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'lazy-blob-placeholder';
+        placeholder.textContent = `Loading media • ${this.formatBytes(blobRef.size)}`;
+        container.appendChild(placeholder);
+
+        const load = async () => {
+            placeholder.textContent = `Loading media • ${this.formatBytes(blobRef.size)}`;
+            try {
+                const cellValue = await this.fetchLazyCell(blobRef);
+                const value = blobRef.path.reduce(
+                    (current, segment) => current?.[segment],
+                    cellValue
+                );
+                container.innerHTML = '';
+                this._buildObjectDOM(container, value, blobRef.column);
+            } catch (error) {
+                placeholder.textContent = 'Failed to load media';
+                placeholder.classList.add('error');
+            }
+        };
+
+        if ('IntersectionObserver' in window) {
+            const observer = new IntersectionObserver((entries) => {
+                if (entries.some(entry => entry.isIntersecting)) {
+                    observer.disconnect();
+                    load();
+                }
+            }, { rootMargin: '200px' });
+            observer.observe(placeholder);
+        } else {
+            load();
+        }
+    }
+
+    fetchLazyCell(blobRef) {
+        const params = new URLSearchParams({
+            uri: this.currentDataset,
+            column: blobRef.column,
+            index: blobRef.index.toString()
+        });
+        const key = params.toString();
+        if (!this.lazyCellRequests.has(key)) {
+            const request = fetch(`${this.apiBase}/dataset/cell?${params}`)
+                .then(async response => {
+                    if (!response.ok) {
+                        const error = await response.json().catch(() => ({}));
+                        throw new Error(error.detail || `API error: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => data.value)
+                .catch(error => {
+                    this.lazyCellRequests.delete(key);
+                    throw error;
+                });
+            this.lazyCellRequests.set(key, request);
+        }
+        return this.lazyCellRequests.get(key);
     }
 
     renderMediaCell(cell, mediaData) {
@@ -596,7 +664,13 @@ class LanceViewer {
             return;
         }
 
-        // 4. Handle Nested Media
+        // 4. Handle lazy blob references
+        if (obj.type === 'blob_ref') {
+            this.renderLazyBlob(parent, obj);
+            return;
+        }
+
+        // 5. Handle Nested Media
         if (obj.type === 'media') {
             const mediaWrap = document.createElement('div');
             this.renderMediaCell(mediaWrap, obj);
@@ -604,7 +678,7 @@ class LanceViewer {
             return;
         }
 
-       // 5. Handle Arrays
+       // 6. Handle Arrays
         if (Array.isArray(obj)) {
             const list = document.createElement('div');
             list.className = 'co-list';

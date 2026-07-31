@@ -127,6 +127,11 @@ curl --get http://localhost:8080/dataset/rows \
   --data-urlencode 'limit=50' \
   --data-urlencode 'offset=0'
 
+curl --get http://localhost:8080/dataset/cell \
+  --data-urlencode 'uri=s3://my-bucket/path/events.lance' \
+  --data-urlencode 'column=media' \
+  --data-urlencode 'index=0'
+
 curl --get http://localhost:8080/dataset/sql \
   --data-urlencode 'uri=s3://my-bucket/path/events.lance' \
   --data-urlencode 'query=SELECT * FROM dataset LIMIT 20'
@@ -139,6 +144,7 @@ Available endpoints:
 - `GET /dataset/schema`
 - `GET /dataset/columns`
 - `GET /dataset/rows`
+- `GET /dataset/cell`
 - `GET /dataset/sql`
 - `GET /dataset/vector/preview`
 
@@ -158,6 +164,7 @@ Binary values are detected from their file signatures. Recognized images,
 audio, and videos are rendered with native browser controls; unknown binary
 values retain the existing UTF-8 or base64 fallback. Common formats include
 PNG, JPEG, GIF, WebP, WAV, MP3, FLAC, Ogg, MP4, WebM, AVI, and MPEG.
+Blob-backed cells are loaded lazily as they approach the viewport.
 
 ## Development
 
