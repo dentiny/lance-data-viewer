@@ -118,7 +118,7 @@ def test_rows_defaults(client, sample_uri):
     assert response.status_code == 200
     body = response.json()
     assert body["total"] == ROWS
-    assert body["limit"] == 50
+    assert body["limit"] == 20
     assert body["offset"] == 0
     assert len(body["rows"]) == ROWS
 
@@ -173,20 +173,55 @@ def test_rows_scalar_and_binary_serialization(client, sample_uri):
     assert rows[1]["blob"] == base64.b64encode(b"\xff\xfe\x01\x02").decode()
 
 
-def test_rows_materialize_media_in_blob_lists(client, media_list_uri):
+def test_rows_return_lazy_references_for_blob_lists(client, media_list_uri):
     rows = api_get(client, "/dataset/rows", media_list_uri).json()["rows"]
 
     media = rows[0]["media"]
     assert len(media) == 3
+    assert all(item["type"] == "blob_ref" for item in media)
+    assert all(item["column"] == "media" for item in media)
+    assert all(item["index"] == 0 for item in media)
+    assert [item["path"] for item in media] == [[0], [1], [2]]
+    assert all("base64" not in item for item in media)
+
+
+def test_cell_materializes_media_in_blob_lists(client, media_list_uri):
+    response = api_get(
+        client,
+        "/dataset/cell",
+        media_list_uri,
+        column="media",
+        index=0,
+    )
+    assert response.status_code == 200
+    media = response.json()["value"]
     assert media[0]["type"] == "media"
     assert media[0]["media_type"] == "image"
     assert media[0]["mime_type"] == "image/jpeg"
-    assert media[1]["type"] == "media"
     assert media[1]["media_type"] == "audio"
     assert media[1]["mime_type"] == "audio/wav"
-    assert media[2]["type"] == "media"
     assert media[2]["media_type"] == "video"
     assert media[2]["mime_type"] == "video/mp4"
+
+
+def test_cell_validates_column_and_row(client, sample_uri):
+    invalid_column = api_get(
+        client,
+        "/dataset/cell",
+        sample_uri,
+        column="missing",
+        index=0,
+    )
+    assert invalid_column.status_code == 400
+
+    missing_row = api_get(
+        client,
+        "/dataset/cell",
+        sample_uri,
+        column="id",
+        index=ROWS,
+    )
+    assert missing_row.status_code == 404
 
 
 def test_rows_vector_serialization(client, sample_uri):

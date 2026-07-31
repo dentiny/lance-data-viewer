@@ -400,6 +400,19 @@ table tr:hover {
     min-width: 240px;
 }
 
+.lazy-blob-placeholder {
+    min-width: 160px;
+    padding: 12px;
+    border-radius: 4px;
+    background: #f8f9fa;
+    color: #6c757d;
+    font-size: 0.8rem;
+}
+
+.lazy-blob-placeholder.error {
+    color: #c0392b;
+}
+
 .media-preview {
     display: flex;
     flex-direction: column;
