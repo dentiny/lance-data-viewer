@@ -61,6 +61,42 @@ def open_dataset(uri: str):
         logger.warning("Failed to open dataset URI: %s", error)
         raise HTTPException(status_code=400, detail="Unable to open dataset URI")
 
+
+def describe_schema(schema):
+    """Build the schema and column metadata used by the viewer."""
+    fields = []
+    columns = []
+    for field in schema:
+        is_vector = (
+            (pa.types.is_list(field.type) or pa.types.is_fixed_size_list(field.type))
+            and pa.types.is_floating(field.type.value_type)
+        )
+        field_info = {
+            "name": field.name,
+            "type": str(field.type),
+            "nullable": field.nullable,
+        }
+        if is_vector:
+            field_info["vector_dim"] = None
+        fields.append(field_info)
+
+        column = {
+            "name": field.name,
+            "type": str(field.type),
+            "nullable": field.nullable,
+            "is_vector": is_vector,
+        }
+        if is_vector:
+            column["dim"] = None
+        columns.append(column)
+
+    metadata = {
+        key.decode("utf-8", errors="replace"): value.decode("utf-8", errors="replace")
+        for key, value in (schema.metadata or {}).items()
+    }
+    return {"fields": fields, "metadata": metadata, "columns": columns}
+
+
 def serialize_arrow_value(value):
     try:
         # Stop immediately if the Arrow scalar is null
@@ -189,10 +225,11 @@ async def health_check():
 async def get_dataset_info(uri: str = Query(min_length=1)):
     dataset = open_dataset(uri)
     try:
+        description = describe_schema(dataset.schema)
         return {
             "uri": uri,
-            "rows": dataset.count_rows(),
             "version": dataset.version,
+            **description,
         }
     except Exception as error:
         logger.warning("Failed to inspect dataset: %s", error)
@@ -201,47 +238,17 @@ async def get_dataset_info(uri: str = Query(min_length=1)):
 
 @app.get("/dataset/schema")
 async def get_dataset_schema(uri: str = Query(min_length=1)):
-    schema = open_dataset(uri).schema
-    fields = []
-    for field in schema:
-        field_info = {
-            "name": field.name,
-            "type": str(field.type),
-            "nullable": field.nullable,
-        }
-        if (
-            (pa.types.is_list(field.type) or pa.types.is_fixed_size_list(field.type))
-            and pa.types.is_floating(field.type.value_type)
-        ):
-            field_info["vector_dim"] = None
-        fields.append(field_info)
-
-    metadata = {
-        key.decode("utf-8", errors="replace"): value.decode("utf-8", errors="replace")
-        for key, value in (schema.metadata or {}).items()
+    description = describe_schema(open_dataset(uri).schema)
+    return {
+        "fields": description["fields"],
+        "metadata": description["metadata"],
     }
-    return {"fields": fields, "metadata": metadata}
 
 
 @app.get("/dataset/columns")
 async def get_dataset_columns(uri: str = Query(min_length=1)):
-    schema = open_dataset(uri).schema
-    columns = []
-    for field in schema:
-        is_vector = (
-            (pa.types.is_list(field.type) or pa.types.is_fixed_size_list(field.type))
-            and pa.types.is_floating(field.type.value_type)
-        )
-        column = {
-            "name": field.name,
-            "type": str(field.type),
-            "nullable": field.nullable,
-            "is_vector": is_vector,
-        }
-        if is_vector:
-            column["dim"] = None
-        columns.append(column)
-    return {"columns": columns}
+    description = describe_schema(open_dataset(uri).schema)
+    return {"columns": description["columns"]}
 
 
 @app.get("/dataset/rows")

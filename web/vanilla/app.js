@@ -126,6 +126,7 @@ class LanceViewer {
                 const error = await response.json().catch(() => ({}));
                 throw new Error(error.detail || `API error: ${response.status}`);
             }
+            const dataset = await response.json();
 
             this.currentDataset = uri;
             this.currentPage = 0;
@@ -135,8 +136,8 @@ class LanceViewer {
             this.elements.emptyState.style.display = 'none';
             this.elements.sqlSection.style.display = 'block';
 
-            await this.loadSchema();
-            await this.loadColumns();
+            this.renderSchema(dataset.fields);
+            this.renderColumns(dataset.columns);
             await this.loadData();
             this.setConnectionStatus(`Connected to ${uri}`, 'connected');
         } catch (error) {
@@ -210,72 +211,50 @@ class LanceViewer {
         this.elements.sqlStatus.className = `sql-status ${state}`.trim();
     }
 
-    async loadSchema() {
-        try {
-            const params = new URLSearchParams({ uri: this.currentDataset });
-            const response = await fetch(`${this.apiBase}/dataset/schema?${params}`);
-            if (!response.ok) {
-                throw new Error(`API error: ${response.status} ${response.statusText}`);
-            }
-            const schema = await response.json();
+    renderSchema(fields) {
+        this.elements.schemaDisplay.innerHTML = '';
+        fields.forEach(field => {
+            const fieldDiv = document.createElement('div');
+            const isVector = field.type.includes('list<item: double>') || field.type.includes('fixed_size_list<item: float>');
+            fieldDiv.className = isVector ? 'schema-field vector' : 'schema-field';
 
-            this.elements.schemaDisplay.innerHTML = '';
-            schema.fields.forEach(field => {
-                const fieldDiv = document.createElement('div');
-                const isVector = field.type.includes('list<item: double>') || field.type.includes('fixed_size_list<item: float>');
-                fieldDiv.className = isVector ? 'schema-field vector' : 'schema-field';
-
-                let typeDisplay;
-                if (isVector) {
-                    // Check if this is a CLIP vector
-                    if (field.type.includes('[512]')) {
-                        typeDisplay = `${field.name}: CLIP vector (512-dim float)`;
-                    } else {
-                        typeDisplay = `${field.name}: vector (${field.type})`;
-                    }
+            let typeDisplay;
+            if (isVector) {
+                // Check if this is a CLIP vector
+                if (field.type.includes('[512]')) {
+                    typeDisplay = `${field.name}: CLIP vector (512-dim float)`;
                 } else {
-                    typeDisplay = `${field.name}: ${field.type}`;
+                    typeDisplay = `${field.name}: vector (${field.type})`;
                 }
+            } else {
+                typeDisplay = `${field.name}: ${field.type}`;
+            }
 
-                fieldDiv.textContent = typeDisplay;
-                this.elements.schemaDisplay.appendChild(fieldDiv);
-            });
+            fieldDiv.textContent = typeDisplay;
+            this.elements.schemaDisplay.appendChild(fieldDiv);
+        });
 
-            this.elements.schemaSection.style.display = 'block';
-        } catch (error) {
-            this.showError('Failed to load schema');
-        }
+        this.elements.schemaSection.style.display = 'block';
     }
 
-    async loadColumns() {
-        try {
-            const params = new URLSearchParams({ uri: this.currentDataset });
-            const response = await fetch(`${this.apiBase}/dataset/columns?${params}`);
-            if (!response.ok) {
-                throw new Error(`API error: ${response.status} ${response.statusText}`);
-            }
-            const data = await response.json();
+    renderColumns(columns) {
+        this.allColumns = columns;
+        this.selectedColumns = columns.map(col => col.name);
 
-            this.allColumns = data.columns;
-            this.selectedColumns = data.columns.map(col => col.name);
+        this.elements.columnSelect.innerHTML = '';
+        columns.forEach(column => {
+            const option = document.createElement('option');
+            option.value = column.name;
+            option.textContent = column.is_vector
+                ? `${column.name} (vector)`
+                : column.name;
+            option.selected = true;
+            this.elements.columnSelect.appendChild(option);
+        });
 
-            this.elements.columnSelect.innerHTML = '';
-            data.columns.forEach(column => {
-                const option = document.createElement('option');
-                option.value = column.name;
-                option.textContent = column.is_vector
-                    ? `${column.name} (vector)`
-                    : column.name;
-                option.selected = true;
-                this.elements.columnSelect.appendChild(option);
-            });
-
-            this.elements.columnSelect.style.display = 'block';
-            this.elements.columnSelect.parentElement.querySelector('.column-controls').style.display = 'flex';
-            this.elements.columnSection.style.display = 'block';
-        } catch (error) {
-            this.showError('Failed to load columns');
-        }
+        this.elements.columnSelect.style.display = 'block';
+        this.elements.columnSelect.parentElement.querySelector('.column-controls').style.display = 'flex';
+        this.elements.columnSection.style.display = 'block';
     }
 
     selectAllColumns() {
