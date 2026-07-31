@@ -48,6 +48,14 @@ app.add_middleware(
 )
 
 MAX_LIMIT = 1000
+BLOB_DESCRIPTOR_FIELDS = {"position", "size"}
+BLOB_V2_DESCRIPTOR_FIELDS = {
+    "kind",
+    "position",
+    "size",
+    "blob_id",
+    "blob_uri",
+}
 
 def open_dataset(uri: str):
     """Open a Lance dataset from any URI supported by Lance."""
@@ -97,7 +105,38 @@ def describe_schema(schema):
     return {"fields": fields, "metadata": metadata, "columns": columns}
 
 
-def serialize_arrow_value(value):
+def _serialize_blob_reference(value, blob_context, path):
+    if blob_context is None or not pa.types.is_struct(value.type):
+        return False, None
+
+    field_names = {field.name for field in value.type}
+    if field_names not in (BLOB_DESCRIPTOR_FIELDS, BLOB_V2_DESCRIPTOR_FIELDS):
+        return False, None
+
+    descriptor = value.as_py()
+    if field_names == BLOB_DESCRIPTOR_FIELDS:
+        is_null = descriptor["position"] == 1 and descriptor["size"] == 0
+    else:
+        is_null = (
+            descriptor["kind"] == 0
+            and descriptor["position"] == 0
+            and descriptor["size"] == 0
+            and descriptor["blob_id"] == 0
+            and not descriptor["blob_uri"]
+        )
+    if is_null:
+        return True, None
+
+    return True, {
+        "type": "blob_ref",
+        "column": blob_context["column"],
+        "index": blob_context["index"],
+        "path": list(path),
+        "size": descriptor["size"],
+    }
+
+
+def serialize_arrow_value(value, blob_context=None, path=()):
     try:
         # Stop immediately if the Arrow scalar is null
         if value is None or not getattr(value, "is_valid", True):
@@ -153,36 +192,62 @@ def serialize_arrow_value(value):
                 logger.warning(f"Error processing vector data: {vec_error}")
                 return {"type": "vector", "error": f"Vector processing failed: {str(vec_error)}"}
 
-        # 2. Handle Structs recursively to catch vectors hidden inside objects
+        # 2. Keep blob payloads lazy until their cells enter the viewport.
+        is_blob, blob_reference = _serialize_blob_reference(
+            value, blob_context, path
+        )
+        if is_blob:
+            return blob_reference
+
+        # 3. Handle Structs recursively to catch vectors hidden inside objects
         if pa.types.is_struct(value.type):
             result = {}
             for field in value.type:
                 # In PyArrow, value[field.name] fetches the nested pa.Scalar
-                result[field.name] = serialize_arrow_value(value[field.name])
+                result[field.name] = serialize_arrow_value(
+                    value[field.name],
+                    blob_context,
+                    (*path, field.name),
+                )
             return result
 
-        # 3. Handle Lists recursively (e.g., Arrays of Structs containing Vectors)
+        # 4. Handle Lists recursively (e.g., Arrays of Structs containing Vectors)
         if pa.types.is_list(value.type) or pa.types.is_large_list(value.type) or pa.types.is_fixed_size_list(value.type):
             result = []
-            for item in value:  # Iterating a PyArrow ListScalar yields nested pa.Scalars
-                result.append(serialize_arrow_value(item))
+            for index, item in enumerate(value):
+                result.append(
+                    serialize_arrow_value(
+                        item,
+                        blob_context,
+                        (*path, index),
+                    )
+                )
             return result
 
-        # 4. Fallback to normal serialization for strings, ints, dates, etc.
+        # 5. Fallback to normal serialization for strings, ints, dates, etc.
         return serialize_value(value)
     except Exception as e:
         logger.warning(f"Error serializing value: {e}")
         return {"error": f"Serialization failed: {str(e)}"}
 
 
-def serialize_arrow_table(table):
+def serialize_arrow_table(table, row_offset=0, lazy_blobs=False):
     rows = []
     for row_index in range(table.num_rows):
         row = {}
         for column_index, column_name in enumerate(table.column_names):
             try:
                 value = table.column(column_index)[row_index]
-                row[column_name] = serialize_arrow_value(value)
+                blob_context = None
+                if lazy_blobs:
+                    blob_context = {
+                        "column": column_name,
+                        "index": row_offset + row_index,
+                    }
+                row[column_name] = serialize_arrow_value(
+                    value,
+                    blob_context=blob_context,
+                )
             except Exception as serialize_error:
                 logger.warning(
                     "Failed to serialize column %s at row %s: %s",
@@ -278,7 +343,7 @@ def get_dataset_rows(
             columns=column_list,
             offset=offset,
             limit=limit,
-            blob_handling="all_binary",
+            blob_handling="blobs_descriptions",
         ).to_table()
         logger.info(
             "Read %s rows (offset=%s, limit=%s) from dataset",
@@ -298,11 +363,42 @@ def get_dataset_rows(
         total_count = 1
 
     return {
-        "rows": serialize_arrow_table(result_table),
+        "rows": serialize_arrow_table(
+            result_table,
+            row_offset=offset,
+            lazy_blobs=True,
+        ),
         "total": total_count,
         "limit": limit,
         "offset": offset,
     }
+
+
+@app.get("/dataset/cell")
+def get_dataset_cell(
+    uri: str = Query(min_length=1),
+    column: str = Query(min_length=1),
+    index: int = Query(ge=0),
+):
+    dataset = open_dataset(uri)
+    if column not in dataset.schema.names:
+        raise HTTPException(status_code=400, detail=f"Invalid column: {column}")
+
+    try:
+        table = dataset.scanner(
+            columns=[column],
+            offset=index,
+            limit=1,
+            blob_handling="all_binary",
+        ).to_table()
+    except Exception as error:
+        logger.warning("Failed to read dataset cell: %s", error)
+        raise HTTPException(status_code=400, detail="Unable to read dataset cell")
+
+    if table.num_rows == 0:
+        raise HTTPException(status_code=404, detail="Dataset row not found")
+
+    return {"value": serialize_arrow_value(table.column(0)[0])}
 
 
 @app.get("/dataset/sql")
