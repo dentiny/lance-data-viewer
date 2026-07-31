@@ -174,7 +174,12 @@ def test_rows_scalar_and_binary_serialization(client, sample_uri):
 
 
 def test_rows_return_lazy_references_for_blob_lists(client, media_list_uri):
-    rows = api_get(client, "/dataset/rows", media_list_uri).json()["rows"]
+    rows = api_get(
+        client,
+        "/dataset/rows",
+        media_list_uri,
+        lazy_blobs=True,
+    ).json()["rows"]
 
     media = rows[0]["media"]
     assert len(media) == 3
@@ -183,6 +188,15 @@ def test_rows_return_lazy_references_for_blob_lists(client, media_list_uri):
     assert all(item["index"] == 0 for item in media)
     assert [item["path"] for item in media] == [[0], [1], [2]]
     assert all("base64" not in item for item in media)
+
+
+def test_rows_materialize_blobs_by_default(client, media_list_uri):
+    rows = api_get(client, "/dataset/rows", media_list_uri).json()["rows"]
+    media = rows[0]["media"]
+    assert media[0]["type"] == "media"
+    assert media[0]["mime_type"] == "image/jpeg"
+    assert media[1]["mime_type"] == "audio/wav"
+    assert media[2]["mime_type"] == "video/mp4"
 
 
 def test_cell_materializes_media_in_blob_lists(client, media_list_uri):
