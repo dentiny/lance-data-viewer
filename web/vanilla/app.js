@@ -120,16 +120,22 @@ class LanceViewer {
         this.setConnectionStatus('Connecting...');
 
         try {
+            this.currentDataset = uri;
+            this.currentPage = 0;
+            this.allColumns = [];
+            this.selectedColumns = [];
+
             const params = new URLSearchParams({ uri });
-            const response = await fetch(`${this.apiBase}/dataset?${params}`);
+            const metadataRequest = fetch(`${this.apiBase}/dataset?${params}`);
+            const dataRequest = this.loadData();
+
+            const response = await metadataRequest;
             if (!response.ok) {
                 const error = await response.json().catch(() => ({}));
                 throw new Error(error.detail || `API error: ${response.status}`);
             }
             const dataset = await response.json();
 
-            this.currentDataset = uri;
-            this.currentPage = 0;
             this.elements.datasetTitle.textContent = this.datasetLabel(uri);
             this.elements.datasetTitle.title = uri;
             this.elements.datasetHeader.style.display = 'block';
@@ -138,7 +144,10 @@ class LanceViewer {
 
             this.renderSchema(dataset.fields);
             this.renderColumns(dataset.columns);
-            await this.loadData();
+            const dataLoaded = await dataRequest;
+            if (!dataLoaded) {
+                throw new Error('Failed to load data');
+            }
             this.setConnectionStatus(`Connected to ${uri}`, 'connected');
         } catch (error) {
             this.currentDataset = null;
@@ -301,10 +310,12 @@ class LanceViewer {
             this.renderTable(data.rows);
             this.updatePagination();
             this.hideLoading();
+            return true;
 
         } catch (error) {
             this.hideLoading();
             this.showError('Failed to load data');
+            return false;
         }
     }
 

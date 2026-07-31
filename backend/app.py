@@ -221,8 +221,10 @@ async def health_check():
         logger.error(f"Error in health check: {e}")
         return {"ok": False, "error": str(e)}
 
+
+# Lance exposes synchronous I/O, so FastAPI runs this handler in its thread pool.
 @app.get("/dataset")
-async def get_dataset_info(uri: str = Query(min_length=1)):
+def get_dataset_info(uri: str = Query(min_length=1)):
     dataset = open_dataset(uri)
     try:
         description = describe_schema(dataset.schema)
@@ -251,8 +253,9 @@ async def get_dataset_columns(uri: str = Query(min_length=1)):
     return {"columns": description["columns"]}
 
 
+# Keep row I/O off the event loop so it can overlap metadata loading.
 @app.get("/dataset/rows")
-async def get_dataset_rows(
+def get_dataset_rows(
     uri: str = Query(min_length=1),
     limit: int = Query(default=50, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
