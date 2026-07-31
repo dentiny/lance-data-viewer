@@ -238,10 +238,11 @@ async def health_check():
 def get_dataset_info(uri: str = Query(min_length=1)):
     dataset = open_dataset(uri)
     try:
+        description = describe_schema(dataset.schema)
         return {
             "uri": uri,
-            "rows": dataset.count_rows(),
             "version": dataset.version,
+            **description,
         }
     except Exception as error:
         logger.warning("Failed to inspect dataset: %s", error)
@@ -264,7 +265,8 @@ def get_dataset_schema(uri: str = Query(min_length=1)):
 
 @app.get("/dataset/columns")
 def get_dataset_columns(uri: str = Query(min_length=1)):
-    return {"columns": describe_schema(open_dataset(uri).schema)["columns"]}
+    description = describe_schema(open_dataset(uri).schema)
+    return {"columns": description["columns"]}
 
 
 @app.get("/dataset/rows")

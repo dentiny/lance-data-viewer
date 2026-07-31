@@ -120,27 +120,26 @@ class LanceViewer {
         this.setConnectionStatus('Connecting...');
 
         try {
+            this.currentDataset = uri;
+            this.currentPage = 0;
+            const dataPromise = this.loadData();
             const params = new URLSearchParams({ uri });
             const response = await fetch(`${this.apiBase}/dataset?${params}`);
             if (!response.ok) {
                 const error = await response.json().catch(() => ({}));
                 throw new Error(error.detail || `API error: ${response.status}`);
             }
+            const dataset = await response.json();
 
-            this.currentDataset = uri;
-            this.currentPage = 0;
             this.elements.datasetTitle.textContent = this.datasetLabel(uri);
             this.elements.datasetTitle.title = uri;
             this.elements.datasetHeader.style.display = 'block';
             this.elements.emptyState.style.display = 'none';
             this.elements.sqlSection.style.display = 'block';
 
-            this.allColumns = [];
-            this.selectedColumns = [];
-            await Promise.all([
-                this.loadMetadata(),
-                this.loadData()
-            ]);
+            this.renderSchema(dataset.fields);
+            this.renderColumns(dataset.columns);
+            await dataPromise;
             this.setConnectionStatus(`Connected to ${uri}`, 'connected');
         } catch (error) {
             this.currentDataset = null;
@@ -211,23 +210,6 @@ class LanceViewer {
     setSqlStatus(message, state = '') {
         this.elements.sqlStatus.textContent = message;
         this.elements.sqlStatus.className = `sql-status ${state}`.trim();
-    }
-
-    async loadMetadata() {
-        try {
-            const params = new URLSearchParams({ uri: this.currentDataset });
-            const response = await fetch(`${this.apiBase}/dataset/metadata?${params}`);
-            if (!response.ok) {
-                throw new Error(`API error: ${response.status} ${response.statusText}`);
-            }
-            const metadata = await response.json();
-            this.renderSchema(metadata.fields);
-            this.renderColumns(metadata.columns);
-            return true;
-        } catch (error) {
-            this.showError('Failed to load metadata');
-            return false;
-        }
     }
 
     renderSchema(fields) {
