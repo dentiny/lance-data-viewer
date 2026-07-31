@@ -3,6 +3,7 @@
 import base64
 
 import lance
+import pyarrow as pa
 import pytest
 
 from conftest import CLIP_DIM, ROWS, VEC_DIM
@@ -28,8 +29,25 @@ def test_healthz_compat_flags(client):
 def test_dataset_info(client, sample_uri):
     response = api_get(client, "/dataset", sample_uri)
     assert response.status_code == 200
-    assert response.json()["rows"] == ROWS
-    assert response.json()["uri"] == sample_uri
+    body = response.json()
+    assert body["uri"] == sample_uri
+    assert "rows" not in body
+    assert [field["name"] for field in body["fields"]] == [
+        "id",
+        "text",
+        "score",
+        "blob",
+        "vec",
+        "embedding",
+    ]
+    assert [column["name"] for column in body["columns"]] == [
+        "id",
+        "text",
+        "score",
+        "blob",
+        "vec",
+        "embedding",
+    ]
 
 
 def test_dataset_uri_is_required(client):
@@ -51,9 +69,7 @@ def test_uri_is_passed_to_lance_unchanged(client, monkeypatch):
 
     class FakeDataset:
         version = 7
-
-        def count_rows(self):
-            return 3
+        schema = pa.schema([("id", pa.int64())])
 
     monkeypatch.setattr(
         app_module.lance,
