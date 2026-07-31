@@ -322,7 +322,7 @@ async def get_dataset_columns(uri: str = Query(min_length=1)):
 @app.get("/dataset/rows")
 def get_dataset_rows(
     uri: str = Query(min_length=1),
-    limit: int = Query(default=20, ge=1, le=MAX_LIMIT),
+    limit: int = Query(default=50, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
     columns: Optional[str] = Query(default=None),
 ):

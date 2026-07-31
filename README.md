@@ -124,7 +124,7 @@ curl --get http://localhost:8080/dataset/schema \
 
 curl --get http://localhost:8080/dataset/rows \
   --data-urlencode 'uri=s3://my-bucket/path/events.lance' \
-  --data-urlencode 'limit=20' \
+  --data-urlencode 'limit=50' \
   --data-urlencode 'offset=0'
 
 curl --get http://localhost:8080/dataset/cell \

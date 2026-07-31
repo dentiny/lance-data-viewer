@@ -118,7 +118,7 @@ def test_rows_defaults(client, sample_uri):
     assert response.status_code == 200
     body = response.json()
     assert body["total"] == ROWS
-    assert body["limit"] == 20
+    assert body["limit"] == 50
     assert body["offset"] == 0
     assert len(body["rows"]) == ROWS
 

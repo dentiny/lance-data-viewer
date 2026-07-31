@@ -2,7 +2,7 @@ class LanceViewer {
     constructor() {
         this.currentDataset = null;
         this.currentPage = 0;
-        this.pageSize = 20;
+        this.pageSize = 50;
         this.totalRows = 0;
         this.selectedColumns = [];
         this.allColumns = [];
