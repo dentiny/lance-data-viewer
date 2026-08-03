@@ -6,6 +6,7 @@ path for unreadable datasets.
 """
 
 import base64
+import inspect
 
 import lancedb
 import pytest
@@ -41,6 +42,34 @@ def test_datasets_lists_created_tables(client):
     names = response.json()["datasets"]
     assert "sample" in names
     assert "broken" in names
+
+
+# /datasets/{name}/metadata
+
+def test_metadata_combines_schema_and_columns(client):
+    response = client.get("/datasets/sample/metadata")
+    assert response.status_code == 200
+    body = response.json()
+    assert {field["name"] for field in body["fields"]} == {
+        "id", "text", "score", "blob", "vec", "embedding"
+    }
+    columns = {column["name"]: column for column in body["columns"]}
+    assert columns["vec"]["is_vector"] is True
+    assert columns["id"]["is_vector"] is False
+
+
+def test_dataset_io_handlers_are_synchronous():
+    import app as app_module
+
+    handlers = (
+        app_module.list_datasets,
+        app_module.get_dataset_metadata,
+        app_module.get_dataset_schema,
+        app_module.get_dataset_columns,
+        app_module.get_dataset_rows,
+        app_module.get_vector_preview,
+    )
+    assert all(not inspect.iscoroutinefunction(handler) for handler in handlers)
 
 
 # /datasets/{name}/schema
