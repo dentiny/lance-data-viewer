@@ -55,6 +55,7 @@ def test_remote_dataset_uri_is_required(client):
 def test_remote_dataset_invalid_uri_returns_400(client):
     response = client.get("/dataset/schema", params={"uri": "/does/not/exist"})
     assert response.status_code == 400
+    assert response.json()["detail"].startswith("Unable to open dataset URI:")
 
 
 def test_remote_dataset_schema_and_columns(client, sample_uri):

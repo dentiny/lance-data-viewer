@@ -71,7 +71,10 @@ def open_remote_dataset(uri: str):
         return lance.dataset(uri.strip())
     except Exception as error:
         logger.warning("Unable to open remote dataset: %s", error)
-        raise HTTPException(status_code=400, detail="Unable to open dataset URI")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unable to open dataset URI: {error}",
+        )
 
 def serialize_arrow_value(value):
     try:
