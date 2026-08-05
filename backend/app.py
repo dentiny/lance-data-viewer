@@ -66,6 +66,20 @@ def get_lance_connection():
     return lancedb.connect(str(DATA_PATH))
 
 
+def serialize_schema_metadata(metadata):
+    """Convert Arrow schema metadata into a JSON-safe dictionary.
+
+    PyArrow exposes schema metadata as bytes keys and values, but JSON requires
+    string keys and values. ``serialize_value`` decodes valid UTF-8 bytes and
+    base64-encodes bytes that cannot be decoded, preventing FastAPI response
+    serialization from raising ``UnicodeDecodeError``.
+    """
+    return {
+        serialize_value(key): serialize_value(value)
+        for key, value in (metadata or {}).items()
+    }
+
+
 def describe_schema(schema):
     """Build schema and column metadata in one pass."""
     fields = []
@@ -96,7 +110,7 @@ def describe_schema(schema):
 
     return {
         "fields": fields,
-        "metadata": schema.metadata or {},
+        "metadata": serialize_schema_metadata(schema.metadata),
         "columns": columns,
     }
 
