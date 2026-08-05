@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - GitHub Actions pinned to the majors that run on Node 24, before Node 20 leaves the runners (#60).
+- FastAPI startup logging moved from the deprecated `on_event` decorator to a lifespan context manager (#77).
 - Dataset loading now fetches combined schema and column metadata in parallel with row data, reducing four sequential I/O operations to two concurrent requests (#75).
 
 ### Fixed
