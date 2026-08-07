@@ -33,6 +33,94 @@ def test_healthz_compat_flags(client):
     assert compat["lance_v2_format"] == (installed >= parse_version("0.16"))
 
 
+# /config and dataset selection
+
+def test_config_reports_environment_data_path(client):
+    body = client.get("/config").json()
+    assert body == {
+        "data_path_configured": True,
+        "default_reference": "main",
+    }
+
+
+def test_dataset_location_required_without_environment(client, monkeypatch):
+    import app as app_module
+
+    monkeypatch.setattr(app_module, "DATA_PATH", None)
+    response = client.get("/datasets")
+    assert response.status_code == 400
+    assert "location is required" in response.json()["detail"]
+
+
+def test_query_dataset_location_used_without_environment(client, monkeypatch, data_dir):
+    import app as app_module
+
+    monkeypatch.setattr(app_module, "DATA_PATH", None)
+    response = client.get("/datasets", params={"data_location": str(data_dir)})
+    assert response.status_code == 200
+    assert "sample" in response.json()["datasets"]
+
+
+def test_open_table_reference_forms(client):
+    import app as app_module
+
+    calls = []
+    checked_out = []
+
+    class Table:
+        def checkout(self, reference):
+            checked_out.append(reference)
+
+    class Database:
+        def open_table(self, name, **kwargs):
+            calls.append((name, kwargs))
+            return Table()
+
+    db = Database()
+    app_module.open_table_at_reference(db, "sample", "main")
+    app_module.open_table_at_reference(db, "sample", "42")
+    app_module.open_table_at_reference(db, "sample", "tag:release")
+    app_module.open_table_at_reference(db, "sample", "branch:experiment")
+    app_module.open_table_at_reference(db, "sample", "branch:experiment@7")
+
+    assert calls == [
+        ("sample", {}),
+        ("sample", {"version": 42}),
+        ("sample", {}),
+        ("sample", {"branch": "experiment"}),
+        ("sample", {"branch": "experiment", "version": 7}),
+    ]
+    assert checked_out == ["release"]
+
+
+def test_version_checkout_falls_back_for_older_lancedb(client):
+    import app as app_module
+
+    checked_out = []
+
+    class Table:
+        def checkout(self, reference):
+            checked_out.append(reference)
+
+    class LegacyDatabase:
+        def open_table(self, name, **kwargs):
+            if kwargs:
+                raise TypeError("unexpected keyword argument 'version'")
+            return Table()
+
+    app_module.open_table_at_reference(LegacyDatabase(), "sample", "3")
+    assert checked_out == [3]
+
+
+def test_invalid_branch_version_returns_400(client):
+    response = client.get(
+        "/datasets/sample/schema",
+        params={"reference": "branch:experiment@not-a-version"},
+    )
+    assert response.status_code == 400
+    assert "branch:name@<number>" in response.json()["detail"]
+
+
 # /datasets
 
 def test_datasets_lists_created_tables(client):

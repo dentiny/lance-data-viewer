@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Dataset locations can be selected in the UI when `DATA_PATH` is unset. Tables can be opened at main, a numeric version, or a tag.
+
 ## [0.3.1] - 2026-06-11
 
 ### Changed
