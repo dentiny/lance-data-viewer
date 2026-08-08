@@ -6,21 +6,29 @@ class LanceViewer {
         this.totalRows = 0;
         this.selectedColumns = [];
         this.allColumns = [];
+        this.lazyCellRequests = new Map();
         this.apiBase = window.location.origin;
-        this.dataPathConfigured = false;
-        this.currentDataLocation = '';
         this.currentReference = 'main';
 
         this.initializeElements();
         this.setupEventListeners();
         this.checkHealth();
-        this.initializeConnection();
     }
 
     initializeElements() {
         this.elements = {
             healthStatus: document.getElementById('healthStatus'),
-            datasetList: document.getElementById('datasetList'),
+            datasetForm: document.getElementById('datasetForm'),
+            datasetUri: document.getElementById('datasetUri'),
+            datasetReference: document.getElementById('datasetReference'),
+            connectDataset: document.getElementById('connectDataset'),
+            connectionStatus: document.getElementById('connectionStatus'),
+            sqlSection: document.getElementById('sqlSection'),
+            sqlForm: document.getElementById('sqlForm'),
+            sqlInput: document.getElementById('sqlInput'),
+            runSql: document.getElementById('runSql'),
+            sqlStatus: document.getElementById('sqlStatus'),
+            emptyState: document.getElementById('emptyState'),
             datasetHeader: document.getElementById('datasetHeader'),
             datasetTitle: document.getElementById('datasetTitle'),
             columnSection: document.getElementById('columnSection'),
@@ -41,16 +49,19 @@ class LanceViewer {
             selectNoneCols: document.getElementById('selectNoneCols'),
             applyColumns: document.getElementById('applyColumns'),
             tooltip: document.getElementById('tooltip'),
-            toggleWordWrap: document.getElementById('toggleWordWrap'),
-            dataLocationField: document.getElementById('dataLocationField'),
-            dataLocation: document.getElementById('dataLocation'),
-            datasetReference: document.getElementById('datasetReference'),
-            openDatasetLocation: document.getElementById('openDatasetLocation'),
-            connectionError: document.getElementById('connectionError')
+            toggleWordWrap: document.getElementById('toggleWordWrap')
         };
     }
 
     setupEventListeners() {
+        this.elements.datasetForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            this.connectToDataset();
+        });
+        this.elements.sqlForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            this.runSqlQuery();
+        });
         this.elements.prevPage.addEventListener('click', () => this.previousPage());
         this.elements.nextPage.addEventListener('click', () => this.nextPage());
         this.elements.pageSize.addEventListener('change', (e) => {
@@ -62,12 +73,6 @@ class LanceViewer {
         this.elements.selectAllCols.addEventListener('click', () => this.selectAllColumns());
         this.elements.selectNoneCols.addEventListener('click', () => this.selectNoColumns());
         this.elements.applyColumns.addEventListener('click', () => this.applyColumnSelection());
-        this.elements.openDatasetLocation.addEventListener('click', () => this.applyConnection());
-        [this.elements.dataLocation, this.elements.datasetReference].forEach(input => {
-            input.addEventListener('keydown', (event) => {
-                if (event.key === 'Enter') this.applyConnection();
-            });
-        });
 
         document.addEventListener('mousemove', (e) => this.updateTooltipPosition(e));
 
@@ -80,71 +85,6 @@ class LanceViewer {
         });
     }
 
-    async initializeConnection() {
-        try {
-            const response = await fetch(`${this.apiBase}/config`);
-            if (!response.ok) throw new Error('Failed to load configuration');
-            const config = await response.json();
-            this.dataPathConfigured = config.data_path_configured;
-            this.currentReference = config.default_reference || 'main';
-            this.elements.datasetReference.value = this.currentReference;
-
-            if (this.dataPathConfigured) {
-                this.elements.dataLocationField.style.display = 'none';
-                await this.loadDatasets();
-            } else {
-                this.elements.datasetList.innerHTML =
-                    '<div class="loading">Enter a Lance dataset location above.</div>';
-                this.elements.dataLocation.focus();
-            }
-        } catch (error) {
-            this.showConnectionError(error.message);
-        }
-    }
-
-    async applyConnection() {
-        const dataLocation = this.elements.dataLocation.value.trim();
-        if (!this.dataPathConfigured && !dataLocation) {
-            this.showConnectionError('Lance dataset location is required.');
-            this.elements.dataLocation.focus();
-            return;
-        }
-
-        this.currentDataLocation = dataLocation;
-        this.currentReference = this.elements.datasetReference.value.trim() || 'main';
-        this.elements.datasetReference.value = this.currentReference;
-        this.elements.connectionError.textContent = '';
-        this.currentDataset = null;
-        this.elements.datasetHeader.style.display = 'none';
-        this.elements.columnSection.style.display = 'none';
-        this.elements.schemaSection.style.display = 'none';
-        await this.loadDatasets();
-    }
-
-    contextParams(includeReference = true) {
-        const params = new URLSearchParams();
-        if (!this.dataPathConfigured && this.currentDataLocation) {
-            params.set('data_location', this.currentDataLocation);
-        }
-        if (includeReference) {
-            params.set('reference', this.currentReference);
-        }
-        return params;
-    }
-
-    async responseError(response) {
-        try {
-            const body = await response.json();
-            return body.detail || `API error: ${response.status} ${response.statusText}`;
-        } catch (_error) {
-            return `API error: ${response.status} ${response.statusText}`;
-        }
-    }
-
-    showConnectionError(message) {
-        this.elements.connectionError.textContent = message;
-    }
-
     async checkHealth() {
         try {
             const response = await fetch(`${this.apiBase}/healthz`);
@@ -154,12 +94,12 @@ class LanceViewer {
             const data = await response.json();
             if (data.ok) {
                 // Show Lance version prominently along with app version
-                const lanceVersion = data.lancedb_version || 'unknown';
+                const lanceVersion = data.lance_version || 'unknown';
                 const pyarrowVersion = data.pyarrow_version || 'unknown';
                 this.elements.healthStatus.innerHTML = `
                     <div class="version-info">
                         <div class="app-version">Lance Data Viewer v${data.app_version}</div>
-                        <div class="lance-version">LanceDB ${lanceVersion} • PyArrow ${pyarrowVersion}</div>
+                        <div class="lance-version">Lance ${lanceVersion} • PyArrow ${pyarrowVersion}</div>
                     </div>
                 `;
                 this.elements.healthStatus.className = 'health-status healthy';
@@ -172,129 +112,172 @@ class LanceViewer {
         }
     }
 
-    async loadDatasets() {
+    async connectToDataset() {
+        const uri = this.elements.datasetUri.value.trim();
+        const reference = this.elements.datasetReference.value.trim() || 'main';
+        if (!uri) {
+            this.setConnectionStatus('Enter a dataset URI.', 'error');
+            return;
+        }
+
+        this.elements.connectDataset.disabled = true;
+        this.setConnectionStatus('Connecting...');
+
         try {
-            this.elements.datasetList.innerHTML = '<div class="loading">Loading datasets...</div>';
-            const params = this.contextParams(false);
-            const suffix = params.toString() ? `?${params}` : '';
-            const response = await fetch(`${this.apiBase}/datasets${suffix}`);
+            this.currentDataset = uri;
+            this.currentReference = reference;
+            this.elements.datasetReference.value = reference;
+            this.currentPage = 0;
+            this.allColumns = [];
+            this.selectedColumns = [];
+            this.lazyCellRequests.clear();
+
+            const params = this.datasetParams();
+            const metadataRequest = fetch(`${this.apiBase}/dataset?${params}`);
+            const dataRequest = this.loadData();
+
+            const response = await metadataRequest;
             if (!response.ok) {
-                throw new Error(await this.responseError(response));
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.detail || `API error: ${response.status}`);
             }
-            const data = await response.json();
+            const dataset = await response.json();
 
-            this.elements.datasetList.innerHTML = '';
+            this.elements.datasetTitle.textContent = this.datasetLabel(uri);
+            this.elements.datasetTitle.title = uri;
+            this.elements.datasetHeader.style.display = 'block';
+            this.elements.emptyState.style.display = 'none';
+            this.elements.sqlSection.style.display = 'block';
 
-            if (data.datasets.length === 0) {
-                this.elements.datasetList.innerHTML = '<div class="loading">No datasets found</div>';
-                return;
+            this.renderSchema(dataset.fields);
+            this.renderColumns(dataset.columns);
+            const dataLoaded = await dataRequest;
+            if (!dataLoaded) {
+                throw new Error('Failed to load data');
             }
-
-            data.datasets.forEach(dataset => {
-                const item = document.createElement('div');
-                item.className = 'dataset-item';
-                item.textContent = dataset;
-                item.addEventListener('click', () => this.selectDataset(dataset, item));
-                this.elements.datasetList.appendChild(item);
-            });
+            this.setConnectionStatus(`Connected to ${uri}`, 'connected');
         } catch (error) {
-            this.elements.datasetList.innerHTML = '<div class="error">Failed to load datasets</div>';
-            this.showConnectionError(error.message);
+            this.currentDataset = null;
+            this.setConnectionStatus(error.message, 'error');
+        } finally {
+            this.elements.connectDataset.disabled = false;
         }
     }
 
-    async selectDataset(datasetName, selectedItem) {
-        document.querySelectorAll('.dataset-item').forEach(item => {
-            item.classList.remove('active');
+    datasetLabel(uri) {
+        const parts = uri.replace(/\/+$/, '').split('/');
+        return parts[parts.length - 1] || uri;
+    }
+
+    datasetParams(values = {}) {
+        return new URLSearchParams({
+            uri: this.currentDataset,
+            reference: this.currentReference,
+            ...values
+        });
+    }
+
+    setConnectionStatus(message, state = '') {
+        this.elements.connectionStatus.textContent = message;
+        this.elements.connectionStatus.className = `connection-status ${state}`.trim();
+    }
+
+    async runSqlQuery() {
+        if (!this.currentDataset) return;
+        const query = this.elements.sqlInput.value.trim();
+        if (!query) {
+            this.setSqlStatus('Enter a SQL query.', 'error');
+            return;
+        }
+
+        this.elements.runSql.disabled = true;
+        this.setSqlStatus('Running query...');
+        this.showLoading();
+
+        try {
+            const params = this.datasetParams({
+                query,
+                limit: '1000'
+            });
+            const response = await fetch(`${this.apiBase}/dataset/sql?${params}`);
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.detail || `API error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            this.renderTable(data.rows);
+            this.totalRows = data.count;
+            this.elements.prevPage.disabled = true;
+            this.elements.nextPage.disabled = true;
+            this.elements.pageInfo.textContent = data.truncated
+                ? `Showing first ${data.count} SQL rows`
+                : `${data.count} SQL rows`;
+            this.hideLoading();
+            this.setSqlStatus(
+                data.truncated
+                    ? `Result capped at ${data.limit} rows.`
+                    : `Query returned ${data.count} rows.`,
+                'success'
+            );
+        } catch (error) {
+            this.hideLoading();
+            this.showError(error.message);
+            this.setSqlStatus(error.message, 'error');
+        } finally {
+            this.elements.runSql.disabled = false;
+        }
+    }
+
+    setSqlStatus(message, state = '') {
+        this.elements.sqlStatus.textContent = message;
+        this.elements.sqlStatus.className = `sql-status ${state}`.trim();
+    }
+
+    renderSchema(fields) {
+        this.elements.schemaDisplay.innerHTML = '';
+        fields.forEach(field => {
+            const fieldDiv = document.createElement('div');
+            const isVector = field.type.includes('list<item: double>') || field.type.includes('fixed_size_list<item: float>');
+            fieldDiv.className = isVector ? 'schema-field vector' : 'schema-field';
+
+            let typeDisplay;
+            if (isVector) {
+                // Check if this is a CLIP vector
+                if (field.type.includes('[512]')) {
+                    typeDisplay = `${field.name}: CLIP vector (512-dim float)`;
+                } else {
+                    typeDisplay = `${field.name}: vector (${field.type})`;
+                }
+            } else {
+                typeDisplay = `${field.name}: ${field.type}`;
+            }
+
+            fieldDiv.textContent = typeDisplay;
+            this.elements.schemaDisplay.appendChild(fieldDiv);
         });
 
-        selectedItem.classList.add('active');
-
-        this.currentDataset = datasetName;
-        this.currentPage = 0;
-        this.elements.datasetTitle.textContent = datasetName;
-        this.elements.datasetHeader.style.display = 'block';
-        this.elements.connectionError.textContent = '';
-
-        await this.loadSchema();
-        await this.loadColumns();
-        await this.loadData();
+        this.elements.schemaSection.style.display = 'block';
     }
 
-    async loadSchema() {
-        try {
-            const params = this.contextParams();
-            const response = await fetch(
-                `${this.apiBase}/datasets/${encodeURIComponent(this.currentDataset)}/schema?${params}`
-            );
-            if (!response.ok) {
-                throw new Error(await this.responseError(response));
-            }
-            const schema = await response.json();
+    renderColumns(columns) {
+        this.allColumns = columns;
+        this.selectedColumns = columns.map(col => col.name);
 
-            this.elements.schemaDisplay.innerHTML = '';
-            schema.fields.forEach(field => {
-                const fieldDiv = document.createElement('div');
-                const isVector = field.type.includes('list<item: double>') || field.type.includes('fixed_size_list<item: float>');
-                fieldDiv.className = isVector ? 'schema-field vector' : 'schema-field';
+        this.elements.columnSelect.innerHTML = '';
+        columns.forEach(column => {
+            const option = document.createElement('option');
+            option.value = column.name;
+            option.textContent = column.is_vector
+                ? `${column.name} (vector)`
+                : column.name;
+            option.selected = true;
+            this.elements.columnSelect.appendChild(option);
+        });
 
-                let typeDisplay;
-                if (isVector) {
-                    // Check if this is a CLIP vector
-                    if (field.type.includes('[512]')) {
-                        typeDisplay = `${field.name}: CLIP vector (512-dim float)`;
-                    } else {
-                        typeDisplay = `${field.name}: vector (${field.type})`;
-                    }
-                } else {
-                    typeDisplay = `${field.name}: ${field.type}`;
-                }
-
-                fieldDiv.textContent = typeDisplay;
-                this.elements.schemaDisplay.appendChild(fieldDiv);
-            });
-
-            this.elements.schemaSection.style.display = 'block';
-        } catch (error) {
-            this.showConnectionError(error.message);
-            this.showError(error.message);
-            return false;
-        }
-    }
-
-    async loadColumns() {
-        try {
-            const params = this.contextParams();
-            const response = await fetch(
-                `${this.apiBase}/datasets/${encodeURIComponent(this.currentDataset)}/columns?${params}`
-            );
-            if (!response.ok) {
-                throw new Error(await this.responseError(response));
-            }
-            const data = await response.json();
-
-            this.allColumns = data.columns;
-            this.selectedColumns = data.columns.map(col => col.name);
-
-            this.elements.columnSelect.innerHTML = '';
-            data.columns.forEach(column => {
-                const option = document.createElement('option');
-                option.value = column.name;
-                option.textContent = column.is_vector
-                    ? `${column.name} (vector)`
-                    : column.name;
-                option.selected = true;
-                this.elements.columnSelect.appendChild(option);
-            });
-
-            this.elements.columnSelect.style.display = 'block';
-            this.elements.columnSelect.parentElement.querySelector('.column-controls').style.display = 'flex';
-            this.elements.columnSection.style.display = 'block';
-        } catch (error) {
-            this.showConnectionError(error.message);
-            this.showError(error.message);
-            return false;
-        }
+        this.elements.columnSelect.style.display = 'block';
+        this.elements.columnSelect.parentElement.querySelector('.column-controls').style.display = 'flex';
+        this.elements.columnSection.style.display = 'block';
     }
 
     selectAllColumns() {
@@ -318,25 +301,23 @@ class LanceViewer {
     async loadData() {
         if (!this.currentDataset) return;
 
+        this.lazyCellRequests.clear();
         this.showLoading();
 
         try {
-            const params = new URLSearchParams({
+            const params = this.datasetParams({
                 limit: this.pageSize.toString(),
-                offset: (this.currentPage * this.pageSize).toString()
+                offset: (this.currentPage * this.pageSize).toString(),
+                lazy_blobs: 'true'
             });
-            const context = this.contextParams();
-            context.forEach((value, key) => params.set(key, value));
 
             if (this.selectedColumns.length > 0 && this.selectedColumns.length < this.allColumns.length) {
                 params.append('columns', this.selectedColumns.join(','));
             }
 
-            const response = await fetch(
-                `${this.apiBase}/datasets/${encodeURIComponent(this.currentDataset)}/rows?${params}`
-            );
+            const response = await fetch(`${this.apiBase}/dataset/rows?${params}`);
             if (!response.ok) {
-                throw new Error(await this.responseError(response));
+                throw new Error(`API error: ${response.status} ${response.statusText}`);
             }
             const data = await response.json();
 
@@ -344,16 +325,17 @@ class LanceViewer {
             this.renderTable(data.rows);
             this.updatePagination();
             this.hideLoading();
+            return true;
 
         } catch (error) {
             this.hideLoading();
-            this.showConnectionError(error.message);
-            this.showError(error.message);
+            this.showError('Failed to load data');
             return false;
         }
     }
 
     renderTable(rows) {
+        this.elements.dataSection.style.display = 'block';
         if (rows.length === 0) {
             this.elements.tableBody.innerHTML = '<tr><td colspan="100%">No data found</td></tr>';
             return;
@@ -380,6 +362,10 @@ class LanceViewer {
                 if (value && typeof value === 'object') {
                     if (value.type === 'vector') {
                         this.renderVectorCell(td, value, column);
+                    } else if (value.type === 'blob_ref') {
+                        this.renderLazyBlob(td, value);
+                    } else if (value.type === 'media') {
+                        this.renderMediaCell(td, value);
                     } else {
                         // Pass complex objects to our new recursive UI builder
                         this.renderComplexObject(td, value, column);
@@ -394,6 +380,106 @@ class LanceViewer {
         });
 
         this.elements.dataSection.style.display = 'block';
+    }
+
+    renderLazyBlob(container, blobRef) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'lazy-blob-placeholder';
+        placeholder.textContent = `Loading media • ${this.formatBytes(blobRef.size)}`;
+        container.appendChild(placeholder);
+
+        const load = async () => {
+            placeholder.textContent = `Loading media • ${this.formatBytes(blobRef.size)}`;
+            try {
+                const cellValue = await this.fetchLazyCell(blobRef);
+                const value = blobRef.path.reduce(
+                    (current, segment) => current?.[segment],
+                    cellValue
+                );
+                container.innerHTML = '';
+                this._buildObjectDOM(container, value, blobRef.column);
+            } catch (error) {
+                placeholder.textContent = 'Failed to load media';
+                placeholder.classList.add('error');
+            }
+        };
+
+        if ('IntersectionObserver' in window) {
+            const observer = new IntersectionObserver((entries) => {
+                if (entries.some(entry => entry.isIntersecting)) {
+                    observer.disconnect();
+                    load();
+                }
+            }, { rootMargin: '200px' });
+            observer.observe(placeholder);
+        } else {
+            load();
+        }
+    }
+
+    fetchLazyCell(blobRef) {
+        const params = this.datasetParams({
+            column: blobRef.column,
+            index: blobRef.index.toString()
+        });
+        const key = params.toString();
+        if (!this.lazyCellRequests.has(key)) {
+            const request = fetch(`${this.apiBase}/dataset/cell?${params}`)
+                .then(async response => {
+                    if (!response.ok) {
+                        const error = await response.json().catch(() => ({}));
+                        throw new Error(error.detail || `API error: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => data.value)
+                .catch(error => {
+                    this.lazyCellRequests.delete(key);
+                    throw error;
+                });
+            this.lazyCellRequests.set(key, request);
+        }
+        return this.lazyCellRequests.get(key);
+    }
+
+    renderMediaCell(cell, mediaData) {
+        cell.className = 'media-cell';
+        const wrapper = document.createElement('div');
+        wrapper.className = 'media-preview';
+        const source = `data:${mediaData.mime_type};base64,${mediaData.base64}`;
+
+        let mediaElement;
+        if (mediaData.media_type === 'image') {
+            mediaElement = document.createElement('img');
+            mediaElement.alt = mediaData.mime_type;
+            mediaElement.loading = 'lazy';
+        } else if (mediaData.media_type === 'audio') {
+            mediaElement = document.createElement('audio');
+            mediaElement.controls = true;
+            mediaElement.preload = 'metadata';
+        } else if (mediaData.media_type === 'video') {
+            mediaElement = document.createElement('video');
+            mediaElement.controls = true;
+            mediaElement.preload = 'metadata';
+        } else {
+            cell.textContent = `Unsupported media type: ${mediaData.mime_type}`;
+            return;
+        }
+
+        mediaElement.src = source;
+        const info = document.createElement('div');
+        info.className = 'media-info';
+        info.textContent = `${mediaData.mime_type} • ${this.formatBytes(mediaData.size)}`;
+
+        wrapper.appendChild(mediaElement);
+        wrapper.appendChild(info);
+        cell.appendChild(wrapper);
+    }
+
+    formatBytes(size) {
+        if (size < 1024) return `${size} B`;
+        if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+        return `${(size / (1024 * 1024)).toFixed(1)} MB`;
     }
 
     renderVectorCell(cell, vectorData, columnName) {
@@ -598,7 +684,21 @@ class LanceViewer {
             return;
         }
 
-       // 4. Handle Arrays
+        // 4. Handle lazy blob references
+        if (obj.type === 'blob_ref') {
+            this.renderLazyBlob(parent, obj);
+            return;
+        }
+
+        // 5. Handle Nested Media
+        if (obj.type === 'media') {
+            const mediaWrap = document.createElement('div');
+            this.renderMediaCell(mediaWrap, obj);
+            parent.appendChild(mediaWrap);
+            return;
+        }
+
+       // 6. Handle Arrays
         if (Array.isArray(obj)) {
             const list = document.createElement('div');
             list.className = 'co-list';

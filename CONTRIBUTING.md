@@ -5,16 +5,16 @@ project is, the design constraints that shape it, and how to propose changes.
 
 ## What This Project Is
 
-Lance Data Viewer is a read-only, mount-and-go web UI for browsing Lance and
-LanceDB tables. The intended flow is:
+Lance Data Viewer is a read-only, stateless web UI for browsing a Lance
+dataset by URI. The intended flow is:
 
-1. Point a Docker container at a directory of Lance files.
+1. Start the container without a data volume.
 2. Open a browser.
-3. Browse.
+3. Enter a local or object-store Lance dataset URI and browse.
 
 There is no setup, no database to configure, no writes. The viewer is meant
-for local development, data inspection, and sanity-checking datasets produced
-by other pipelines.
+for local development, remote deployment, data inspection, and sanity-checking
+datasets produced by other pipelines.
 
 ## Design Constraints
 
@@ -44,10 +44,10 @@ that accepts raw SQL from the client fall under this constraint.
 
 ### No metadata database
 
-The Lance files in the mounted directory are the only source of truth. The
-viewer does not maintain a separate SQLite, DuckDB, or Redis alongside them.
+The Lance dataset at the request URI is the only source of truth. The viewer
+does not maintain a separate SQLite, DuckDB, or Redis alongside it.
 Adding one would introduce a lifecycle (migrations, eviction, consistency)
-that conflicts with the mount-and-go model.
+that conflicts with the stateless URI-based model.
 
 ### No in-app authentication
 
@@ -57,8 +57,7 @@ proxy (Nginx, Traefik, Caddy) that handles auth at the edge.
 
 ### Read-only access
 
-The viewer never writes to the mounted Lance directory. The examples in the
-README mount `/data` with `:ro`, and the code path contains no write
+The viewer never writes to the Lance dataset. The code path contains no write
 operations. This is deliberate: the viewer should be safe to point at
 production data without any fear of corruption.
 
@@ -91,15 +90,13 @@ for new contributors:
 ## Development Workflow
 
 ```bash
-# Build with a specific Lance version (default: 0.29.2)
-docker build -f docker/Dockerfile \
-    --build-arg LANCEDB_VERSION=0.29.2 \
-    -t lance-data-viewer:dev .
+# Build the image
+docker build -f docker/Dockerfile -t lance-data-viewer:dev .
 
-# Run with your data
-docker run --rm -p 8080:8080 -e DATA_PATH=/data -v $(pwd)/data:/data:ro lance-data-viewer:dev
+# Run without a preconfigured data path
+docker run --rm -p 8080:8080 lance-data-viewer:dev
 
-# Open the UI
+# Open the UI and enter a dataset URI
 open http://localhost:8080
 ```
 

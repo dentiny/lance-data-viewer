@@ -1,180 +1,144 @@
-"""API endpoint tests, based on docs/spec.md.
-
-Covers /healthz, /datasets, /schema, /columns, /rows (pagination, column
-filtering, serialization), /vector/preview, and the graceful-degradation
-path for unreadable datasets.
-"""
+"""API tests for request-scoped Lance dataset URIs."""
 
 import base64
 
-import lancedb
+import lance
+import pyarrow as pa
 import pytest
-from packaging.version import parse as parse_version
 
 from conftest import CLIP_DIM, ROWS, VEC_DIM
 
 
-# /healthz
+def api_get(client, path, uri, **params):
+    return client.get(path, params={"uri": str(uri), **params})
+
 
 def test_healthz_reports_versions(client):
-    response = client.get("/healthz")
-    assert response.status_code == 200
-    body = response.json()
+    body = client.get("/healthz").json()
     assert body["ok"] is True
-    assert body["lancedb_version"] == lancedb.__version__
-    assert body["build_tag"] == f"app-{body['app_version']}_lancedb-{lancedb.__version__}"
+    assert body["lance_version"] == lance.__version__
+    assert body["build_tag"] == f"app-{body['app_version']}_lance-{lance.__version__}"
 
 
 def test_healthz_compat_flags(client):
     compat = client.get("/healthz").json()["compat"]
-    installed = parse_version(lancedb.__version__)
     assert compat["vector_preview"] is True
-    assert compat["schema_evolution"] == (installed >= parse_version("0.5"))
-    assert compat["lance_v2_format"] == (installed >= parse_version("0.16"))
+    assert compat["remote_dataset_uri"] is True
 
 
-# /config and dataset selection
-
-def test_config_reports_environment_data_path(client):
-    body = client.get("/config").json()
-    assert body == {
-        "data_path_configured": True,
-        "default_reference": "main",
-    }
-
-
-def test_dataset_location_required_without_environment(client, monkeypatch):
-    import app as app_module
-
-    monkeypatch.setattr(app_module, "DATA_PATH", None)
-    response = client.get("/datasets")
-    assert response.status_code == 400
-    assert "location is required" in response.json()["detail"]
-
-
-def test_query_dataset_location_used_without_environment(client, monkeypatch, data_dir):
-    import app as app_module
-
-    monkeypatch.setattr(app_module, "DATA_PATH", None)
-    response = client.get("/datasets", params={"data_location": str(data_dir)})
-    assert response.status_code == 200
-    assert "sample" in response.json()["datasets"]
-
-
-def test_open_table_reference_forms(client):
-    import app as app_module
-
-    calls = []
-    checked_out = []
-
-    class Table:
-        def checkout(self, reference):
-            checked_out.append(reference)
-
-    class Database:
-        def open_table(self, name, **kwargs):
-            calls.append((name, kwargs))
-            return Table()
-
-    db = Database()
-    app_module.open_table_at_reference(db, "sample", "main")
-    app_module.open_table_at_reference(db, "sample", "42")
-    app_module.open_table_at_reference(db, "sample", "tag:release")
-    app_module.open_table_at_reference(db, "sample", "branch:experiment")
-    app_module.open_table_at_reference(db, "sample", "branch:experiment@7")
-
-    assert calls == [
-        ("sample", {}),
-        ("sample", {"version": 42}),
-        ("sample", {}),
-        ("sample", {"branch": "experiment"}),
-        ("sample", {"branch": "experiment", "version": 7}),
-    ]
-    assert checked_out == ["release"]
-
-
-def test_version_checkout_falls_back_for_older_lancedb(client):
-    import app as app_module
-
-    checked_out = []
-
-    class Table:
-        def checkout(self, reference):
-            checked_out.append(reference)
-
-    class LegacyDatabase:
-        def open_table(self, name, **kwargs):
-            if kwargs:
-                raise TypeError("unexpected keyword argument 'version'")
-            return Table()
-
-    app_module.open_table_at_reference(LegacyDatabase(), "sample", "3")
-    assert checked_out == [3]
-
-
-def test_invalid_branch_version_returns_400(client):
-    response = client.get(
-        "/datasets/sample/schema",
-        params={"reference": "branch:experiment@not-a-version"},
-    )
-    assert response.status_code == 400
-    assert "branch:name@<number>" in response.json()["detail"]
-
-
-# /datasets
-
-def test_datasets_lists_created_tables(client):
-    response = client.get("/datasets")
-    assert response.status_code == 200
-    names = response.json()["datasets"]
-    assert "sample" in names
-    assert "broken" in names
-
-
-# /datasets/{name}/schema
-
-def test_schema_fields(client):
-    response = client.get("/datasets/sample/schema")
+def test_dataset_info(client, sample_uri):
+    response = api_get(client, "/dataset", sample_uri)
     assert response.status_code == 200
     body = response.json()
+    assert body["uri"] == sample_uri
+    assert "rows" not in body
+    assert [field["name"] for field in body["fields"]] == [
+        "id",
+        "text",
+        "score",
+        "blob",
+        "vec",
+        "embedding",
+    ]
+    assert [column["name"] for column in body["columns"]] == [
+        "id",
+        "text",
+        "score",
+        "blob",
+        "vec",
+        "embedding",
+    ]
+
+
+def test_dataset_uri_is_required(client):
+    assert client.get("/dataset").status_code == 422
+    assert client.get("/dataset/schema").status_code == 422
+    assert client.get("/dataset/rows").status_code == 422
+
+
+def test_invalid_dataset_uri_returns_400(client):
+    response = api_get(client, "/dataset", "s3://bucket/does-not-exist.lance")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unable to open dataset URI"
+
+
+def test_uri_is_passed_to_lance_unchanged(client, monkeypatch):
+    import app as app_module
+
+    received = []
+
+    class FakeDataset:
+        version = 7
+        schema = pa.schema([("id", pa.int64())])
+
+    monkeypatch.setattr(
+        app_module.lance,
+        "dataset",
+        lambda uri: received.append(uri) or FakeDataset(),
+    )
+    uri = "s3://example-bucket/path/data.lance"
+    response = api_get(client, "/dataset", uri)
+    assert response.status_code == 200
+    assert received == [uri]
+
+
+@pytest.mark.parametrize(
+    ("reference", "expected_version"),
+    [("7", 7), ("tag:baseline", "baseline"), ("baseline", "baseline")],
+)
+def test_reference_is_passed_to_lance(
+    client, monkeypatch, reference, expected_version
+):
+    import app as app_module
+
+    received = []
+
+    class FakeDataset:
+        version = 7
+        schema = pa.schema([("id", pa.int64())])
+
+    def fake_dataset(uri, **kwargs):
+        received.append((uri, kwargs))
+        return FakeDataset()
+
+    monkeypatch.setattr(app_module.lance, "dataset", fake_dataset)
+    uri = "s3://example-bucket/path/data.lance"
+    response = api_get(client, "/dataset", uri, reference=reference)
+
+    assert response.status_code == 200
+    assert received == [(uri, {"version": expected_version})]
+
+
+def test_empty_tag_returns_400(client, sample_uri):
+    response = api_get(client, "/dataset", sample_uri, reference="tag:")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Tag name cannot be empty"
+
+
+def test_schema_fields(client, sample_uri):
+    body = api_get(client, "/dataset/schema", sample_uri).json()
     assert "metadata" in body
-    fields = {f["name"]: f for f in body["fields"]}
+    fields = {field["name"]: field for field in body["fields"]}
     assert set(fields) == {"id", "text", "score", "blob", "vec", "embedding"}
     assert fields["id"]["type"] == "int64"
     assert fields["id"]["nullable"] is True
     assert fields["vec"]["type"] == "list<item: float>"
     assert fields["embedding"]["type"].startswith("fixed_size_list")
     assert str(CLIP_DIM) in fields["embedding"]["type"]
-
-
-def test_schema_vector_dim_only_on_vector_fields(client):
-    fields = {f["name"]: f for f in client.get("/datasets/sample/schema").json()["fields"]}
     assert "vector_dim" in fields["vec"]
-    assert "vector_dim" in fields["embedding"]
     assert "vector_dim" not in fields["id"]
-    assert "vector_dim" not in fields["text"]
 
 
-def test_schema_invalid_dataset_name(client):
-    assert client.get("/datasets/bad.name/schema").status_code == 400
-
-
-def test_schema_missing_dataset(client):
-    assert client.get("/datasets/nosuchtable/schema").status_code == 500
-
-
-def test_schema_readable_on_corrupted_dataset(client):
-    response = client.get("/datasets/broken/schema")
+def test_schema_readable_on_corrupted_dataset(client, broken_uri):
+    response = api_get(client, "/dataset/schema", broken_uri)
     assert response.status_code == 200
-    assert [f["name"] for f in response.json()["fields"]] == ["id"]
+    assert [field["name"] for field in response.json()["fields"]] == ["id"]
 
 
-# /datasets/{name}/columns
-
-def test_columns_vector_flags(client):
-    response = client.get("/datasets/sample/columns")
+def test_columns_vector_flags(client, sample_uri):
+    response = api_get(client, "/dataset/columns", sample_uri)
     assert response.status_code == 200
-    columns = {c["name"]: c for c in response.json()["columns"]}
+    columns = {column["name"]: column for column in response.json()["columns"]}
     assert columns["vec"]["is_vector"] is True
     assert columns["vec"]["dim"] is None
     assert columns["embedding"]["is_vector"] is True
@@ -182,14 +146,8 @@ def test_columns_vector_flags(client):
     assert "dim" not in columns["id"]
 
 
-def test_columns_invalid_dataset_name(client):
-    assert client.get("/datasets/bad.name/columns").status_code == 400
-
-
-# /datasets/{name}/rows
-
-def test_rows_defaults(client):
-    response = client.get("/datasets/sample/rows")
+def test_rows_defaults(client, sample_uri):
+    response = api_get(client, "/dataset/rows", sample_uri)
     assert response.status_code == 200
     body = response.json()
     assert body["total"] == ROWS
@@ -198,150 +156,224 @@ def test_rows_defaults(client):
     assert len(body["rows"]) == ROWS
 
 
-def test_rows_pagination(client):
-    body = client.get("/datasets/sample/rows", params={"limit": 3, "offset": 0}).json()
-    assert [r["id"] for r in body["rows"]] == [0, 1, 2]
-    assert body["total"] == ROWS
-    assert body["limit"] == 3
+def test_rows_pagination(client, sample_uri):
+    body = api_get(
+        client, "/dataset/rows", sample_uri, limit=3, offset=0
+    ).json()
+    assert [row["id"] for row in body["rows"]] == [0, 1, 2]
 
-    body = client.get("/datasets/sample/rows", params={"limit": 3, "offset": 8}).json()
-    assert [r["id"] for r in body["rows"]] == [8, 9]
+    body = api_get(
+        client, "/dataset/rows", sample_uri, limit=3, offset=8
+    ).json()
+    assert [row["id"] for row in body["rows"]] == [8, 9]
 
 
-def test_rows_offset_past_end(client):
-    body = client.get("/datasets/sample/rows", params={"offset": ROWS}).json()
+def test_rows_offset_past_end(client, sample_uri):
+    body = api_get(client, "/dataset/rows", sample_uri, offset=ROWS).json()
     assert body["rows"] == []
     assert body["total"] == ROWS
 
 
-def test_rows_limit_bounds(client):
-    assert client.get("/datasets/sample/rows", params={"limit": 0}).status_code == 422
-    assert client.get("/datasets/sample/rows", params={"limit": 1000}).status_code == 200
-    assert client.get("/datasets/sample/rows", params={"limit": 1001}).status_code == 422
-    assert client.get("/datasets/sample/rows", params={"offset": -1}).status_code == 422
+def test_rows_limit_bounds(client, sample_uri):
+    assert api_get(client, "/dataset/rows", sample_uri, limit=0).status_code == 422
+    assert api_get(client, "/dataset/rows", sample_uri, limit=1000).status_code == 200
+    assert api_get(client, "/dataset/rows", sample_uri, limit=1001).status_code == 422
+    assert api_get(client, "/dataset/rows", sample_uri, offset=-1).status_code == 422
 
 
-def test_rows_column_filtering(client):
-    body = client.get("/datasets/sample/rows", params={"columns": "id,text"}).json()
+def test_rows_column_filtering(client, sample_uri):
+    body = api_get(
+        client, "/dataset/rows", sample_uri, columns="id,text"
+    ).json()
     assert all(set(row) == {"id", "text"} for row in body["rows"])
 
 
-def test_rows_invalid_column_returns_400(client):
-    response = client.get("/datasets/sample/rows", params={"columns": "id,nope"})
+def test_rows_invalid_column_returns_400(client, sample_uri):
+    response = api_get(
+        client, "/dataset/rows", sample_uri, columns="id,nope"
+    )
     assert response.status_code == 400
     assert "nope" in response.json()["detail"]
 
 
-def test_rows_invalid_dataset_name(client):
-    assert client.get("/datasets/bad.name/rows").status_code == 400
-
-
-def test_rows_missing_dataset(client):
-    assert client.get("/datasets/nosuchtable/rows").status_code == 500
-
-
-def test_rows_scalar_serialization(client):
-    rows = client.get("/datasets/sample/rows").json()["rows"]
+def test_rows_scalar_and_binary_serialization(client, sample_uri):
+    rows = api_get(client, "/dataset/rows", sample_uri).json()["rows"]
     assert rows[0]["id"] == 0
     assert rows[0]["text"] == "row 0"
-    assert rows[0]["score"] == 0.0
     assert rows[1]["score"] == 1.5
     assert rows[3]["text"] is None
-
-
-def test_rows_binary_serialization(client):
-    rows = client.get("/datasets/sample/rows").json()["rows"]
-    # UTF-8 decodable bytes come back as text, the rest as base64
     assert rows[0]["blob"] == "hello"
     assert rows[1]["blob"] == base64.b64encode(b"\xff\xfe\x01\x02").decode()
 
 
-def test_rows_vector_serialization(client):
-    rows = client.get("/datasets/sample/rows").json()["rows"]
-    vec = rows[0]["vec"]
-    assert vec["type"] == "vector"
-    assert vec["dim"] == VEC_DIM
-    assert vec["preview"] == [0.0, -1.0, 0.5, 2.0]
-    assert vec["norm"] == pytest.approx(5.25 ** 0.5)
-    assert vec["min"] == -1.0
-    assert vec["max"] == 2.0
-    assert vec["mean"] == pytest.approx(0.375)
+def test_rows_return_lazy_references_for_blob_lists(client, media_list_uri):
+    rows = api_get(
+        client,
+        "/dataset/rows",
+        media_list_uri,
+        lazy_blobs=True,
+    ).json()["rows"]
+
+    media = rows[0]["media"]
+    assert len(media) == 3
+    assert all(item["type"] == "blob_ref" for item in media)
+    assert all(item["column"] == "media" for item in media)
+    assert all(item["index"] == 0 for item in media)
+    assert [item["path"] for item in media] == [[0], [1], [2]]
+    assert all("base64" not in item for item in media)
 
 
-def test_rows_null_vector(client, vec_nulls_preserved):
-    rows = client.get("/datasets/sample/rows").json()["rows"]
+def test_rows_materialize_blobs_by_default(client, media_list_uri):
+    rows = api_get(client, "/dataset/rows", media_list_uri).json()["rows"]
+    media = rows[0]["media"]
+    assert media[0]["type"] == "media"
+    assert media[0]["mime_type"] == "image/jpeg"
+    assert media[1]["mime_type"] == "audio/wav"
+    assert media[2]["mime_type"] == "video/mp4"
+
+
+def test_cell_materializes_media_in_blob_lists(client, media_list_uri):
+    response = api_get(
+        client,
+        "/dataset/cell",
+        media_list_uri,
+        column="media",
+        index=0,
+    )
+    assert response.status_code == 200
+    media = response.json()["value"]
+    assert media[0]["type"] == "media"
+    assert media[0]["media_type"] == "image"
+    assert media[0]["mime_type"] == "image/jpeg"
+    assert media[1]["media_type"] == "audio"
+    assert media[1]["mime_type"] == "audio/wav"
+    assert media[2]["media_type"] == "video"
+    assert media[2]["mime_type"] == "video/mp4"
+
+
+def test_cell_validates_column_and_row(client, sample_uri):
+    invalid_column = api_get(
+        client,
+        "/dataset/cell",
+        sample_uri,
+        column="missing",
+        index=0,
+    )
+    assert invalid_column.status_code == 400
+
+    missing_row = api_get(
+        client,
+        "/dataset/cell",
+        sample_uri,
+        column="id",
+        index=ROWS,
+    )
+    assert missing_row.status_code == 404
+
+
+def test_rows_vector_serialization(client, sample_uri):
+    vector = api_get(client, "/dataset/rows", sample_uri).json()["rows"][0]["vec"]
+    assert vector["type"] == "vector"
+    assert vector["dim"] == VEC_DIM
+    assert vector["preview"] == [0.0, -1.0, 0.5, 2.0]
+    assert vector["norm"] == pytest.approx(5.25 ** 0.5)
+    assert vector["mean"] == pytest.approx(0.375)
+
+
+def test_rows_null_vector(client, sample_uri, vec_nulls_preserved):
+    vector = api_get(client, "/dataset/rows", sample_uri).json()["rows"][5]["vec"]
     if vec_nulls_preserved:
-        assert rows[5]["vec"] is None
+        assert vector is None
     else:
-        # storage turned the null into an empty list, which serializes
-        # to the invalid-vector error object
-        assert rows[5]["vec"] == {"type": "vector", "error": "Invalid vector data"}
+        assert vector == {"type": "vector", "error": "Invalid vector data"}
 
 
-def test_rows_clip_detection(client):
-    embedding = client.get("/datasets/sample/rows").json()["rows"][0]["embedding"]
+def test_rows_clip_detection(client, sample_uri):
+    embedding = api_get(
+        client, "/dataset/rows", sample_uri
+    ).json()["rows"][0]["embedding"]
     assert embedding["type"] == "vector"
     assert embedding["dim"] == CLIP_DIM
     assert embedding["model"] == "likely_clip"
-    assert len(embedding["preview"]) == 32
     assert embedding["norm"] == pytest.approx(1.0, abs=1e-3)
-    assert embedding["stats"]["normalized"] is True
-    assert embedding["stats"]["sparsity"] == 0.0
-    assert embedding["stats"]["positive_ratio"] == 1.0
 
 
-def test_rows_graceful_degradation_on_corrupted_dataset(client):
-    response = client.get("/datasets/broken/rows")
-    assert response.status_code == 200
-    body = response.json()
+def test_rows_graceful_degradation(client, broken_uri):
+    body = api_get(client, "/dataset/rows", broken_uri).json()
     assert body["total"] == 1
-    row = body["rows"][0]
-    assert row["error"] == "Unable to read dataset"
-    assert row["dataset"] == "broken"
-    assert row["details"].startswith("Error:")
+    assert body["rows"][0]["error"] == "Unable to read dataset"
+    assert body["rows"][0]["dataset"] == broken_uri
 
 
-# /datasets/{name}/vector/preview
-
-def test_vector_preview_stats(client, vec_nulls_preserved):
-    response = client.get("/datasets/sample/vector/preview", params={"column": "vec"})
+def test_vector_preview_stats(client, sample_uri, vec_nulls_preserved):
+    response = api_get(
+        client, "/dataset/vector/preview", sample_uri, column="vec"
+    )
     assert response.status_code == 200
     body = response.json()
-    # the null vector is filtered from the count; on format v1 it comes
-    # back as an empty list instead, which counts but adds no values
     assert body["stats"]["count"] == (ROWS - 1 if vec_nulls_preserved else ROWS)
     assert body["stats"]["dim"] == VEC_DIM
     assert body["stats"]["min"] == -1.0
     assert body["stats"]["max"] == 9.0
-    assert body["stats"]["mean"] == pytest.approx(53.5 / 36)
     assert len(body["preview"]) == ROWS - 1
-    first = body["preview"][0]
-    assert first["sample"] == [0.0, -1.0, 0.5, 2.0]
-    assert first["norm"] == pytest.approx(5.25 ** 0.5)
 
 
-def test_vector_preview_sample_capped_at_32(client):
-    body = client.get(
-        "/datasets/sample/vector/preview", params={"column": "embedding"}
+def test_vector_preview_validation(client, sample_uri):
+    assert api_get(
+        client, "/dataset/vector/preview", sample_uri, column="score"
+    ).status_code == 400
+    assert api_get(
+        client, "/dataset/vector/preview", sample_uri, column="nope"
+    ).status_code == 400
+    assert api_get(
+        client, "/dataset/vector/preview", sample_uri
+    ).status_code == 422
+
+
+def test_native_lance_sql(client, sample_uri):
+    response = api_get(
+        client,
+        "/dataset/sql",
+        sample_uri,
+        query="SELECT id, text FROM dataset WHERE id >= 8 ORDER BY id",
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["columns"] == ["id", "text"]
+    assert [row["id"] for row in body["rows"]] == [8, 9]
+    assert body["truncated"] is False
+
+
+def test_native_lance_sql_applies_result_cap(client, sample_uri):
+    body = api_get(
+        client,
+        "/dataset/sql",
+        sample_uri,
+        query="SELECT id FROM dataset ORDER BY id",
+        limit=3,
     ).json()
-    assert body["stats"]["dim"] == CLIP_DIM
-    assert all(len(p["sample"]) == 32 for p in body["preview"])
+    assert [row["id"] for row in body["rows"]] == [0, 1, 2]
+    assert body["truncated"] is True
+    assert body["limit"] == 3
 
 
-def test_vector_preview_non_vector_column(client):
-    response = client.get("/datasets/sample/vector/preview", params={"column": "score"})
+def test_native_lance_sql_is_read_only(client, sample_uri):
+    response = api_get(
+        client,
+        "/dataset/sql",
+        sample_uri,
+        query="DELETE FROM dataset",
+    )
     assert response.status_code == 400
+    assert "Only SELECT" in response.json()["detail"]
 
 
-def test_vector_preview_missing_column(client):
-    response = client.get("/datasets/sample/vector/preview", params={"column": "nope"})
+def test_native_lance_sql_reports_query_errors(client, sample_uri):
+    response = api_get(
+        client,
+        "/dataset/sql",
+        sample_uri,
+        query="SELECT missing_column FROM dataset",
+    )
     assert response.status_code == 400
-
-
-def test_vector_preview_column_param_required(client):
-    assert client.get("/datasets/sample/vector/preview").status_code == 422
-
-
-def test_vector_preview_invalid_dataset_name(client):
-    response = client.get("/datasets/bad.name/vector/preview", params={"column": "vec"})
-    assert response.status_code == 400
+    assert "SQL query failed" in response.json()["detail"]

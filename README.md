@@ -1,240 +1,206 @@
-# Lance Data Viewer - A read-only web UI for Lance datasets
+# Lance Data Viewer
 
-Browse Lance tables from your local machine in a simple web UI. No database to set up. Mount a folder and go.
+A stateless, read-only web UI for inspecting a Lance dataset from a URI.
+The backend opens the URI supplied by the browser, so the container does not
+need a preconfigured data directory or persistent volume.
 
-Images are published for seven LanceDB versions, so you can pick the one that matches your data format.
+## Quick start
 
-![Lance Data Viewer Screenshot](lance_data_viewer_screenshot.png)
-
-### Quick start (Docker)
-
-1. **Pull the recommended version**
+Build the image:
 
 ```bash
-# Modern stable version (recommended for new projects)
-docker pull ghcr.io/lance-format/lance-data-viewer:lancedb-0.33.0
+docker build -f docker/Dockerfile \
+  -t lance-data-viewer:dev .
 ```
 
-2. **Make your data readable (required)**
+Start the viewer with one command:
 
 ```bash
-# Make your Lance data directory and all contents readable by the container
-chmod -R o+rx /path/to/your/lance
+docker run --rm -p 8080:8080 lance-data-viewer:dev
 ```
 
-3. **Run (mount your data)**
+Open <http://localhost:8080>, enter a dataset URI, and select **Connect**.
+Examples:
 
-```bash
-docker run --rm -p 8080:8080 \
-    -e DATA_PATH=/data \
-    -v /path/to/your/lance:/data:ro \
-    ghcr.io/lance-format/lance-data-viewer:lancedb-0.33.0
+```text
+s3://my-bucket/path/events.lance
+gs://my-bucket/path/events.lance
+az://my-container/path/events.lance
 ```
 
-Alternatively, omit `DATA_PATH`/the `/data` mount and enter a database
-location in the web UI. The location can be a local path available to the
-viewer process or an object-store URI supported by LanceDB.
+The URI is request-scoped. It is not stored as global backend state, so one
+deployment can serve multiple users and replicas.
 
-4. **Open the UI**
+The optional reference field accepts:
 
-```
-http://localhost:8080
-```
+- `main` for the latest snapshot (default)
+- `42` for numeric version 42
+- `tag:release` or `release` for a tag
 
-The UI will display the Lance version in the top-right corner for easy identification.
+## Cloud access
 
-### What counts as "Lance data" here?
+Lance resolves remote object-store URIs directly. Give the container or
+Kubernetes workload access using the cloud provider's workload identity:
 
-A folder containing Lance tables (as created by Lance/LanceDB). The app lists tables under `/data`.
+- AWS IAM role / IRSA for `s3://`
+- Google Workload Identity for `gs://`
+- Azure managed identity for `az://`
 
-## Available Lance Versions
+The current UI accepts only a dataset URI. It does not accept, store, or
+forward cloud credentials.
 
-Choose the container that matches your Lance data format:
+## Kubernetes
 
-| Container Tag | Lance Version | PyArrow | Use Case |
-|--------------|---------------|---------|----------|
-| `lancedb-0.33.0` | 0.33.0 | >=16, <25 | **Recommended** - Latest stable version |
-| `lancedb-0.29.2` | 0.29.2 | >=16, <22 | Modern stable version |
-| `lancedb-0.24.3` | 0.24.3 | >=16, <22 | Modern stable version |
-| `lancedb-0.16.0` | 0.16.0 | 16.1.0 | Anchor stable for older datasets |
-| `lancedb-0.5` | 0.5.0 | 14.0.1 | Legacy support |
-| `lancedb-0.3.4` | 0.3.4 | 14.0.1 | Legacy support |
-| `lancedb-0.3.1` | 0.3.1 | 14.0.1 | Legacy support |
-
-### Viewing older Lance data
-
-If you have datasets created with older Lance versions:
-
-```bash
-# For datasets created with Lance 0.16.x
-docker run --rm -p 8080:8080 \
-    -e DATA_PATH=/data \
-    -v /path/to/your/old/lance/data:/data:ro \
-    ghcr.io/lance-format/lance-data-viewer:lancedb-0.16.0
-
-# For very old datasets (Lance 0.3.x era)
-docker run --rm -p 8080:8080 \
-    -e DATA_PATH=/data \
-    -v /path/to/your/legacy/data:/data:ro \
-    ghcr.io/lance-format/lance-data-viewer:lancedb-0.3.4
-```
-
-**Tip**: If you're unsure which version to use, start with `lancedb-0.33.0` and if you get compatibility errors, try progressively older versions.
-
-### Features
-
-- **Read-only browsing** with organized left sidebar (Datasets → Columns → Schema)
-- **Version browsing** for main, numeric versions, and tags
-- **Advanced vector visualization** with CLIP embedding detection and sparkline charts
-- **Schema analysis** with vector column highlighting and type detection
-- **Server-side pagination** with inline controls and column filtering
-- **Robust error handling** - gracefully handles corrupted datasets
-- **Responsive layout** optimized for data viewing
-
-### Configuration (optional)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATA_PATH` | unset | Directory containing Lance tables; the UI asks when unset |
-| `PORT` | `8080` | Port the server listens on |
-
-- **Port:** change host port with `-p 9000:8080`, or set `PORT` env var to change the container's listening port.
-- **Read-only mount:** keep `:ro` to avoid accidental writes in future versions.
-
-When `DATA_PATH` is not set, the UI requires a Lance database location before
-loading tables. The reference field accepts:
-
-- `main` for the latest snapshot on the main branch (default)
-- `42` for version 42 on main
-- `tag:release` for a tag
-
-### Docker Compose
-
-For pipelines or multi-container setups where lance-data-viewer shares a data volume with other services:
+Publish the image to a registry and deploy it as a stateless service:
 
 ```yaml
-services:
-  lance-viewer:
-    image: ghcr.io/lance-format/lance-data-viewer:lancedb-0.33.0
-    environment:
-      DATA_PATH: /data
-    volumes:
-      - lance-data:/data:ro
-    ports:
-      - "8888:8080"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lance-data-viewer
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: lance-data-viewer
+  template:
+    metadata:
+      labels:
+        app: lance-data-viewer
+    spec:
+      containers:
+        - name: viewer
+          image: ghcr.io/dentiny/lance-data-viewer:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lance-data-viewer
+spec:
+  selector:
+    app: lance-data-viewer
+  ports:
+    - port: 80
+      targetPort: http
 ```
 
-Port 8080 is the default inside the container. The example maps to 8888 on the host to avoid conflicts with services like Airflow or Jenkins that also use 8080.
+No volume is required for remote datasets. Configure the pod's service
+account or workload identity separately when the dataset is private.
 
-### Images & registries
+## Optional local dataset access
 
-All images are on the GitHub Container Registry: `ghcr.io/lance-format/lance-data-viewer:TAG`
-
-| Tag | Meaning |
-|-----|---------|
-| `lancedb-{version}` | Latest build for that Lance version (e.g. `lancedb-0.33.0`) |
-| `latest` | Latest main-branch build of the recommended Lance version |
-| `stable` | Most recent tagged release, recommended Lance version |
-| `v{app version}` | Pin to an app release (e.g. `v0.2.0`) |
-| `app-{app version}_lancedb-{version}` | Fully pinned: app release and Lance version |
-
-### Build and test locally
+A dataset on the backend host must be visible inside the container. Mount only
+the directory needed for local development:
 
 ```bash
-# Build with specific Lance version (default: 0.33.0)
-docker build -f docker/Dockerfile \
-    --build-arg LANCEDB_VERSION=0.33.0 \
-    -t lance-data-viewer:dev .
-
-# Build multiple versions for testing
-docker build -f docker/Dockerfile --build-arg LANCEDB_VERSION=0.24.3 -t lance-data-viewer:lancedb-0.24.3 .
-docker build -f docker/Dockerfile --build-arg LANCEDB_VERSION=0.16.0 -t lance-data-viewer:lancedb-0.16.0 .
-docker build -f docker/Dockerfile --build-arg LANCEDB_VERSION=0.3.4 -t lance-data-viewer:lancedb-0.3.4 .
-
-# Make your Lance data readable (one-time setup)
-chmod -R o+rx data
-
-# Run with your data (replace 'data' with your lance folder path)
-docker run --rm -p 8080:8080 -e DATA_PATH=/data -v $(pwd)/data:/data:ro lance-data-viewer:dev
-
-# Open the web interface
-open http://localhost:8080
-
-# Test the API endpoints
-curl http://localhost:8080/healthz
-curl http://localhost:8080/datasets
-curl "http://localhost:8080/datasets/your-dataset/rows?limit=5"
+docker run --rm -p 8080:8080 \
+  -v "$HOME/Desktop/example_lance:/datasets:ro" \
+  lance-data-viewer:dev
 ```
 
-### Run the test suite
+Then enter this URI in the UI:
 
-The API tests run without Docker. With Python 3.11:
+```text
+/datasets/multimedia.lance
+```
+
+This is optional local development behavior, not a startup requirement.
+
+## API
+
+Every dataset endpoint requires a `uri` query parameter:
 
 ```bash
-pip install -c backend/constraints-0.33.0.txt -r backend/requirements.txt
+curl --get http://localhost:8080/dataset \
+  --data-urlencode 'uri=s3://my-bucket/path/events.lance'
+
+curl --get http://localhost:8080/dataset/schema \
+  --data-urlencode 'uri=s3://my-bucket/path/events.lance'
+
+curl --get http://localhost:8080/dataset/rows \
+  --data-urlencode 'uri=s3://my-bucket/path/events.lance' \
+  --data-urlencode 'limit=50' \
+  --data-urlencode 'offset=0' \
+  --data-urlencode 'lazy_blobs=true'
+
+curl --get http://localhost:8080/dataset/cell \
+  --data-urlencode 'uri=s3://my-bucket/path/events.lance' \
+  --data-urlencode 'column=media' \
+  --data-urlencode 'index=0'
+
+curl --get http://localhost:8080/dataset/sql \
+  --data-urlencode 'uri=s3://my-bucket/path/events.lance' \
+  --data-urlencode 'query=SELECT * FROM dataset LIMIT 20'
+```
+
+Available endpoints:
+
+- `GET /healthz`
+- `GET /dataset`
+- `GET /dataset/schema`
+- `GET /dataset/columns`
+- `GET /dataset/rows`
+- `GET /dataset/cell`
+- `GET /dataset/sql`
+- `GET /dataset/vector/preview`
+
+## Features
+
+- Direct Lance dataset access through local or object-store URIs
+- Request-scoped connections suitable for concurrent users and replicas
+- Schema and column inspection
+- Server-side pagination and column filtering
+- Native `LanceDataset.sql()` queries against the `dataset` table
+- Fixed-size and variable-length vector visualization
+- CLIP-512 detection, statistics, sparklines, and tooltips
+- Recursive rendering for nested structs and lists
+- Read-only operation
+
+Binary values are detected from their file signatures. Recognized images,
+audio, and videos are rendered with native browser controls; unknown binary
+values retain the existing UTF-8 or base64 fallback. Common formats include
+PNG, JPEG, GIF, WebP, WAV, MP3, FLAC, Ogg, MP4, WebM, AVI, and MPEG.
+Blob-backed cells are loaded lazily as they approach the viewport.
+API clients that omit `lazy_blobs=true` receive materialized blob values for
+backward compatibility.
+
+## Development
+
+Run the backend tests with Python 3.11:
+
+```bash
+pip install -r backend/requirements.txt
 pip install pytest "httpx<0.28"
-cd backend && python -m pytest tests/ -v
+cd backend
+python -m pytest tests/ -v
 ```
 
-Swap the constraints file to test against a different Lance version. CI runs
-the suite against every supported version.
+The Docker image serves the static frontend and FastAPI backend on port 8080.
+Set `PORT` to change the port inside the container.
 
-### Development workflow
+## Security
 
-```bash
-# Stop any running containers
-docker ps -q | xargs docker stop
+- The service is read-only.
+- Dataset URIs are supplied by users and opened by the backend.
+- Do not expose the service publicly without authentication and URI access
+  controls.
+- Restrict the workload identity to the buckets and prefixes users are
+  allowed to inspect.
 
-# Rebuild after code changes (with specific Lance version)
-docker build -f docker/Dockerfile \
-    --build-arg LANCEDB_VERSION=0.33.0 \
-    -t lance-data-viewer:dev .
+Credential input, URI allowlists, and multi-tenant authorization are planned
+separately.
 
-# Run in background
-docker run --rm -d -p 8080:8080 -e DATA_PATH=/data -v $(pwd)/data:/data:ro lance-data-viewer:dev
+## License
 
-# View logs
-docker logs $(docker ps -q --filter ancestor=lance-data-viewer:dev)
-
-# Check version info
-curl http://localhost:8080/healthz | jq '.lancedb_version'
-```
-
-## Supported Data Types
-
-### ✅ Fully Supported
-- **Standard types**: string, int, float, binary, timestamp, boolean, null
-- **Fixed-size vectors**: `fixed_size_list<item: float>[N]` (e.g., CLIP-512), as written by `Vector(dim)` fields
-- **Variable-length vectors**: `list<item: float>` and `list<item: double>`
-- **Structured data**: nested structs and lists, including vectors inside them
-- **Indexed datasets**: properly created with IVF/HNSW indexes
-
-### ⚠️ Limited Support
-- **Corrupted data**: the schema stays viewable and rows are replaced with an informative error message
-
-### ❌ Not Supported
-- Binary vectors (uint8 arrays), shown as plain lists without vector visualization
-- Custom user-defined types
-- Write operations (read-only viewer)
-
-## Vector Visualization Features
-
-The viewer provides advanced visualization for vector embeddings:
-
-- **CLIP Detection**: Automatically identifies 512-dimensional CLIP embeddings
-- **Statistics**: Shows norm, sparsity, positive ratio, normalization status
-- **Sparkline Charts**: Interactive visual representation of vector values
-- **Detailed Tooltips**: Hover for comprehensive vector analysis
-- **Model Badges**: Visual indicators for recognized embedding types
-
-### Security Notes
-
-- Container runs as non-root
-- No authentication; bind to localhost during development and run behind a reverse proxy if exposing
-- Read-only access prevents accidental data modification
-- Without `DATA_PATH`, the UI can request locations accessible to the server; do not expose that mode to untrusted users
-
-### Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the design constraints and how to
-propose changes. Release history lives in [CHANGELOG.md](CHANGELOG.md).
+MIT

@@ -15,28 +15,43 @@
             <div class="health-status" id="healthStatus">Connecting...</div>
         </header>
 
-        <section class="connection-panel">
-            <div class="connection-field" id="dataLocationField">
-                <label for="dataLocation">Lance dataset location</label>
-                <input id="dataLocation" type="text" placeholder="/path/to/data or s3://bucket/data" required>
-                <small>Enter a path or URI accessible to the viewer server.</small>
-            </div>
-            <div class="connection-field">
-                <label for="datasetReference">Tag or version</label>
-                <input id="datasetReference" type="text" value="main"
-                    placeholder="main, 42, or tag:release">
-                <small>Use main, a version number, or tag:name.</small>
-            </div>
-            <button id="openDatasetLocation" type="button">Open</button>
-            <div class="connection-error" id="connectionError" role="alert"></div>
-        </section>
-
         <main class="main-content">
             <aside class="sidebar">
                 <div class="sidebar-section">
-                    <h3>Datasets</h3>
-                    <div class="dataset-list" id="datasetList">
-                        <div class="loading">Loading datasets...</div>
+                    <h3>Dataset URI</h3>
+                    <form class="dataset-connection" id="datasetForm">
+                        <input
+                            id="datasetUri"
+                            type="text"
+                            placeholder="s3://bucket/path/dataset.lance"
+                            autocomplete="off"
+                            spellcheck="false"
+                        >
+                        <label for="datasetReference">Tag or version</label>
+                        <input
+                            id="datasetReference"
+                            type="text"
+                            value="main"
+                            placeholder="main, 42, or tag:release"
+                            autocomplete="off"
+                            spellcheck="false"
+                        >
+                        <small>Use main, a version number, or tag:name.</small>
+                        <button id="connectDataset" type="submit">Connect</button>
+                    </form>
+                    <div class="connection-status" id="connectionStatus">
+                        Enter a Lance dataset URI to begin.
+                    </div>
+                </div>
+
+                <div class="sidebar-section" id="sqlSection" style="display: none;">
+                    <h3>SQL Query</h3>
+                    <form class="sql-query" id="sqlForm">
+                        <textarea id="sqlInput" rows="6" spellcheck="false">SELECT * FROM dataset LIMIT 50</textarea>
+                        <button id="runSql" type="submit">Run SQL</button>
+                    </form>
+                    <div class="sql-status" id="sqlStatus">
+                        Query the connected dataset as <code>dataset</code>.
                     </div>
                 </div>
 
@@ -60,6 +75,15 @@
             </aside>
 
             <section class="content">
+                <div class="empty-state" id="emptyState">
+                    <div class="empty-state-icon">L</div>
+                    <h2>Explore a Lance dataset</h2>
+                    <p>Connect a local path or object-store URI to inspect its schema, browse rows, preview media, and run SQL.</p>
+                    <div class="empty-state-examples">
+                        <code>/data/events.lance</code>
+                        <code>s3://bucket/path/events.lance</code>
+                    </div>
+                </div>
                 <div class="dataset-header" id="datasetHeader" style="display: none;">
                     <div class="header-row">
                         <h2 id="datasetTitle">Select a dataset</h2>
