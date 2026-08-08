@@ -62,17 +62,39 @@ BLOB_V2_DESCRIPTOR_FIELDS = {
     "blob_uri",
 }
 
-def open_dataset(uri: str):
-    """Open a Lance dataset from any URI supported by Lance."""
+def open_dataset(uri: str, reference: str = "main"):
+    """Open a Lance dataset URI at main, a numeric version, or a tag."""
     dataset_uri = uri.strip()
     if not dataset_uri:
         raise HTTPException(status_code=400, detail="Dataset URI is required")
 
+    value = (reference or "main").strip()
+    if not value or value in {"main", "latest"}:
+        version = None
+    elif value.startswith("tag:"):
+        version = value.removeprefix("tag:").strip()
+        if not version:
+            raise HTTPException(status_code=400, detail="Tag name cannot be empty")
+    elif value.isdigit():
+        version = int(value)
+    else:
+        version = value
+
     try:
-        return lance.dataset(dataset_uri)
+        if version is None:
+            return lance.dataset(dataset_uri)
+        return lance.dataset(dataset_uri, version=version)
     except Exception as error:
-        logger.warning("Failed to open dataset URI: %s", error)
-        raise HTTPException(status_code=400, detail="Unable to open dataset URI")
+        logger.warning("Failed to open dataset URI/reference: %s", error)
+        detail = (
+            "Unable to open dataset URI"
+            if version is None
+            else f"Unable to open dataset reference '{value}'"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=detail,
+        )
 
 
 def serialize_schema_metadata(metadata):
@@ -300,8 +322,11 @@ async def health_check():
         return {"ok": False, "error": str(e)}
 
 @app.get("/dataset")
-def get_dataset_info(uri: str = Query(min_length=1)):
-    dataset = open_dataset(uri)
+def get_dataset_info(
+    uri: str = Query(min_length=1),
+    reference: str = Query(default="main"),
+):
+    dataset = open_dataset(uri, reference)
     try:
         description = describe_schema(dataset.schema)
         return {
@@ -315,13 +340,19 @@ def get_dataset_info(uri: str = Query(min_length=1)):
 
 
 @app.get("/dataset/metadata")
-def get_dataset_metadata(uri: str = Query(min_length=1)):
-    return describe_schema(open_dataset(uri).schema)
+def get_dataset_metadata(
+    uri: str = Query(min_length=1),
+    reference: str = Query(default="main"),
+):
+    return describe_schema(open_dataset(uri, reference).schema)
 
 
 @app.get("/dataset/schema")
-def get_dataset_schema(uri: str = Query(min_length=1)):
-    description = describe_schema(open_dataset(uri).schema)
+def get_dataset_schema(
+    uri: str = Query(min_length=1),
+    reference: str = Query(default="main"),
+):
+    description = describe_schema(open_dataset(uri, reference).schema)
     return {
         "fields": description["fields"],
         "metadata": description["metadata"],
@@ -329,8 +360,11 @@ def get_dataset_schema(uri: str = Query(min_length=1)):
 
 
 @app.get("/dataset/columns")
-def get_dataset_columns(uri: str = Query(min_length=1)):
-    description = describe_schema(open_dataset(uri).schema)
+def get_dataset_columns(
+    uri: str = Query(min_length=1),
+    reference: str = Query(default="main"),
+):
+    description = describe_schema(open_dataset(uri, reference).schema)
     return {"columns": description["columns"]}
 
 
@@ -341,8 +375,9 @@ def get_dataset_rows(
     offset: int = Query(default=0, ge=0),
     columns: Optional[str] = Query(default=None),
     lazy_blobs: bool = Query(default=False),
+    reference: str = Query(default="main"),
 ):
-    dataset = open_dataset(uri)
+    dataset = open_dataset(uri, reference)
     schema = dataset.schema
 
     column_list = None
@@ -397,8 +432,9 @@ def get_dataset_cell(
     uri: str = Query(min_length=1),
     column: str = Query(min_length=1),
     index: int = Query(ge=0),
+    reference: str = Query(default="main"),
 ):
-    dataset = open_dataset(uri)
+    dataset = open_dataset(uri, reference)
     if column not in dataset.schema.names:
         raise HTTPException(status_code=400, detail=f"Invalid column: {column}")
 
@@ -424,6 +460,7 @@ async def query_dataset_sql(
     uri: str = Query(min_length=1),
     query: str = Query(min_length=1),
     limit: int = Query(default=500, ge=1, le=MAX_LIMIT),
+    reference: str = Query(default="main"),
 ):
     statement = query.strip().rstrip(";").strip()
     if not statement.lower().startswith(("select", "with")):
@@ -432,7 +469,7 @@ async def query_dataset_sql(
             detail="Only SELECT or WITH queries are supported",
         )
 
-    dataset = open_dataset(uri)
+    dataset = open_dataset(uri, reference)
     limited_query = (
         f"SELECT * FROM ({statement}) AS viewer_query LIMIT {limit + 1}"
     )
@@ -467,8 +504,9 @@ def get_vector_preview(
     uri: str = Query(min_length=1),
     column: str = Query(min_length=1),
     limit: int = Query(default=100, ge=1, le=MAX_LIMIT),
+    reference: str = Query(default="main"),
 ):
-    dataset = open_dataset(uri)
+    dataset = open_dataset(uri, reference)
     schema = dataset.schema
     if column not in schema.names:
         raise HTTPException(status_code=400, detail=f"Column '{column}' not found")

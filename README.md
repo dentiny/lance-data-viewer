@@ -31,6 +31,12 @@ az://my-container/path/events.lance
 The URI is request-scoped. It is not stored as global backend state, so one
 deployment can serve multiple users and replicas.
 
+The optional reference field accepts:
+
+- `main` for the latest snapshot (default)
+- `42` for numeric version 42
+- `tag:release` or `release` for a tag
+
 ## Cloud access
 
 Lance resolves remote object-store URIs directly. Give the container or

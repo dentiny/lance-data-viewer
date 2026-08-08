@@ -85,6 +85,39 @@ def test_uri_is_passed_to_lance_unchanged(client, monkeypatch):
     assert received == [uri]
 
 
+@pytest.mark.parametrize(
+    ("reference", "expected_version"),
+    [("7", 7), ("tag:baseline", "baseline"), ("baseline", "baseline")],
+)
+def test_reference_is_passed_to_lance(
+    client, monkeypatch, reference, expected_version
+):
+    import app as app_module
+
+    received = []
+
+    class FakeDataset:
+        version = 7
+        schema = pa.schema([("id", pa.int64())])
+
+    def fake_dataset(uri, **kwargs):
+        received.append((uri, kwargs))
+        return FakeDataset()
+
+    monkeypatch.setattr(app_module.lance, "dataset", fake_dataset)
+    uri = "s3://example-bucket/path/data.lance"
+    response = api_get(client, "/dataset", uri, reference=reference)
+
+    assert response.status_code == 200
+    assert received == [(uri, {"version": expected_version})]
+
+
+def test_empty_tag_returns_400(client, sample_uri):
+    response = api_get(client, "/dataset", sample_uri, reference="tag:")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Tag name cannot be empty"
+
+
 def test_schema_fields(client, sample_uri):
     body = api_get(client, "/dataset/schema", sample_uri).json()
     assert "metadata" in body

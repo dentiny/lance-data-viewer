@@ -27,6 +27,16 @@
                             autocomplete="off"
                             spellcheck="false"
                         >
+                        <label for="datasetReference">Tag or version</label>
+                        <input
+                            id="datasetReference"
+                            type="text"
+                            value="main"
+                            placeholder="main, 42, or tag:release"
+                            autocomplete="off"
+                            spellcheck="false"
+                        >
+                        <small>Use main, a version number, or tag:name.</small>
                         <button id="connectDataset" type="submit">Connect</button>
                     </form>
                     <div class="connection-status" id="connectionStatus">

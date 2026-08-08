@@ -103,6 +103,17 @@ header h1 {
     gap: 8px;
 }
 
+.dataset-connection label {
+    color: #495057;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.dataset-connection small {
+    color: #6c757d;
+    font-size: 0.72rem;
+}
+
 .dataset-connection input {
     width: 100%;
     padding: 10px;

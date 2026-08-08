@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Datasets can be opened at the latest snapshot, a numeric version, or a tag selected in the UI.
 - CI smoke test. Each build starts the image it just built and checks `/healthz`, `/datasets`, and the static files, before the image is published (#67).
 
 ### Changed

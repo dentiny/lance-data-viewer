@@ -8,6 +8,7 @@ class LanceViewer {
         this.allColumns = [];
         this.lazyCellRequests = new Map();
         this.apiBase = window.location.origin;
+        this.currentReference = 'main';
 
         this.initializeElements();
         this.setupEventListeners();
@@ -19,6 +20,7 @@ class LanceViewer {
             healthStatus: document.getElementById('healthStatus'),
             datasetForm: document.getElementById('datasetForm'),
             datasetUri: document.getElementById('datasetUri'),
+            datasetReference: document.getElementById('datasetReference'),
             connectDataset: document.getElementById('connectDataset'),
             connectionStatus: document.getElementById('connectionStatus'),
             sqlSection: document.getElementById('sqlSection'),
@@ -112,6 +114,7 @@ class LanceViewer {
 
     async connectToDataset() {
         const uri = this.elements.datasetUri.value.trim();
+        const reference = this.elements.datasetReference.value.trim() || 'main';
         if (!uri) {
             this.setConnectionStatus('Enter a dataset URI.', 'error');
             return;
@@ -122,13 +125,18 @@ class LanceViewer {
 
         try {
             this.currentDataset = uri;
+            this.currentReference = reference;
+            this.elements.datasetReference.value = reference;
             this.currentPage = 0;
             this.allColumns = [];
             this.selectedColumns = [];
             this.lazyCellRequests.clear();
-            const dataPromise = this.loadData();
-            const params = new URLSearchParams({ uri });
-            const response = await fetch(`${this.apiBase}/dataset?${params}`);
+
+            const params = this.datasetParams();
+            const metadataRequest = fetch(`${this.apiBase}/dataset?${params}`);
+            const dataRequest = this.loadData();
+
+            const response = await metadataRequest;
             if (!response.ok) {
                 const error = await response.json().catch(() => ({}));
                 throw new Error(error.detail || `API error: ${response.status}`);
@@ -143,7 +151,7 @@ class LanceViewer {
 
             this.renderSchema(dataset.fields);
             this.renderColumns(dataset.columns);
-            await dataPromise;
+            await dataRequest;
             this.setConnectionStatus(`Connected to ${uri}`, 'connected');
         } catch (error) {
             this.currentDataset = null;
@@ -156,6 +164,14 @@ class LanceViewer {
     datasetLabel(uri) {
         const parts = uri.replace(/\/+$/, '').split('/');
         return parts[parts.length - 1] || uri;
+    }
+
+    datasetParams(values = {}) {
+        return new URLSearchParams({
+            uri: this.currentDataset,
+            reference: this.currentReference,
+            ...values
+        });
     }
 
     setConnectionStatus(message, state = '') {
@@ -176,8 +192,7 @@ class LanceViewer {
         this.showLoading();
 
         try {
-            const params = new URLSearchParams({
-                uri: this.currentDataset,
+            const params = this.datasetParams({
                 query,
                 limit: '1000'
             });
@@ -286,8 +301,7 @@ class LanceViewer {
         this.showLoading();
 
         try {
-            const params = new URLSearchParams({
-                uri: this.currentDataset,
+            const params = this.datasetParams({
                 limit: this.pageSize.toString(),
                 offset: (this.currentPage * this.pageSize).toString(),
                 lazy_blobs: 'true'
@@ -398,8 +412,7 @@ class LanceViewer {
     }
 
     fetchLazyCell(blobRef) {
-        const params = new URLSearchParams({
-            uri: this.currentDataset,
+        const params = this.datasetParams({
             column: blobRef.column,
             index: blobRef.index.toString()
         });
