@@ -155,7 +155,7 @@ def test_metadata_serializes_utf8_and_binary_schema_metadata(client, monkeypatch
     monkeypatch.setattr(
         app_module,
         "open_dataset",
-        lambda _uri: SimpleNamespace(schema=schema),
+        lambda _uri, _reference="main": SimpleNamespace(schema=schema),
     )
 
     metadata = api_get(client, "/dataset/metadata", "test.lance").json()["metadata"]
